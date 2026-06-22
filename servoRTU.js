@@ -307,14 +307,15 @@ function strIndexOf(s, sub, start) {
     return -1;
 }
 
-// 在 JSON 文本中替换 "fieldName": <value> 字段值
-// 不用 RegExp, 不用 String.indexOf (JUCE 引擎不支持), 用 strIndexOf + charAt + substring
-function replaceJsonField(content, fieldName, newValue) {
-    var key = '"' + fieldName + '"';
+// 在 JSON 文本中替换 "key": <value> 字段值
+// key 包含引号 (e.g. '"baudRate"')
+// 找不到时返回原 content (不中断, 让调用方决定)
+// 不用 RegExp, 不用 String.indexOf, 用 strIndexOf + charAt + substring
+function simpleReplaceField(content, key, newValue) {
     var keyIdx = strIndexOf(content, key);
-    if (keyIdx < 0) return null;
+    if (keyIdx < 0) return content;  // 找不到, 返回原内容
     var colonIdx = strIndexOf(content, ':', keyIdx);
-    if (colonIdx < 0) return null;
+    if (colonIdx < 0) return content;
     var valStart = colonIdx + 1;
     while (valStart < content.length) {
         var c = content.charAt(valStart);
@@ -323,9 +324,12 @@ function replaceJsonField(content, fieldName, newValue) {
     }
     var valEnd = valStart;
     if (valStart < content.length && content.charAt(valStart) == '"') {
+        // 字符串值: 找结束的 "
         valEnd = strIndexOf(content, '"', valStart + 1);
-        if (valEnd < 0) return null;
+        if (valEnd < 0) return content;
+        valEnd = valEnd + 1;  // 包括结尾的引号
     } else {
+        // 数字值: 找 , 或 } 或 \n
         while (valEnd < content.length) {
             var c2 = content.charAt(valEnd);
             if (c2 == ',' || c2 == '}' || c2 == '\n') break;
@@ -405,6 +409,7 @@ function modeNeedsReload(mode) {
 
 // 安全更新 module.json defaults 块 (4 个字段)
 // 保留原文件格式 (中文/缩进/换行), 写后用 JSON.parse 验证
+// 用 simpleReplaceField (找不到时返回原内容, 不中断)
 function safeUpdateDefaults(baud, mode) {
     var dir = script.getScriptDirectory();
     var modulePath = dir + "/module.json";
@@ -417,37 +422,21 @@ function safeUpdateDefaults(baud, mode) {
         script.logWarning("safeUpdateDefaults: readFile returned null");
         return false;
     }
-    var defKey = strIndexOf(content, '"defaults"');
-    if (defKey < 0) return false;
-    var braceStart = strIndexOf(content, '{', defKey);
-    if (braceStart < 0) return false;
-    var blockEnd = strIndexOf(content, '"scripts"', braceStart);
-    if (blockEnd < 0) blockEnd = strIndexOf(content, '"parameters"', braceStart);
-    if (blockEnd < 0) return false;
-    var block = content.substring(braceStart, blockEnd);
-    script.log("safeUpdateDefaults: block len=" + block.length);
-    script.log("safeUpdateDefaults: strIndexOf BaudRate=" + strIndexOf(block, '"BaudRate"'));
-    script.log("safeUpdateDefaults: strIndexOf DataBits=" + strIndexOf(block, '"DataBits"'));
-    script.log("safeUpdateDefaults: strIndexOf Parity=" + strIndexOf(block, '"Parity"'));
-    script.log("safeUpdateDefaults: strIndexOf StopBits=" + strIndexOf(block, '"StopBits"'));
     var parts = modeToSerial(mode);
-    // Chataigne Serial Module 用小写字段名: baudRate, dataBits, Parity, stopBits
-    // (但 Parity 是单词, 大写)
-    var c1 = replaceJsonField(block, "baudRate", "" + baud);
-    if (c1 == null) { script.logWarning("safeUpdateDefaults: baudRate not found in block"); return false; }
-    script.log("safeUpdateDefaults: c1 len=" + c1.length + " dataBits in c1=" + (strIndexOf(c1, '"dataBits"') >= 0));
-    var c2 = replaceJsonField(c1, "dataBits", "" + parts[0]);
-    if (c2 == null) { script.logWarning("safeUpdateDefaults: dataBits not found in block"); return false; }
-    var c3 = replaceJsonField(c2, "Parity", '"' + parts[1] + '"');
-    if (c3 == null) { script.logWarning("safeUpdateDefaults: Parity not found in block"); return false; }
-    var c4 = replaceJsonField(c3, "stopBits", "" + parts[2]);
-    if (c4 == null) { script.logWarning("safeUpdateDefaults: stopBits not found in block"); return false; }
-    var newContent = content.substring(0, braceStart) + c4 + content.substring(blockEnd);
+    // 直接在整个 content 中找并替换 4 个字段 (Chataigne 用 camelCase)
+    var newContent = simpleReplaceField(content, '"baudRate"', "" + baud);
+    newContent = simpleReplaceField(newContent, '"dataBits"', "" + parts[0]);
+    newContent = simpleReplaceField(newContent, '"Parity"', '"' + parts[1] + '"');
+    newContent = simpleReplaceField(newContent, '"stopBits"', "" + parts[2]);
+    if (newContent == content) {
+        script.logWarning("safeUpdateDefaults: no fields changed (one or more not found)");
+        return false;
+    }
     if (typeof JSON.parse == "function") {
         JSON.parse(newContent);
     }
     util.writeFile(modulePath, newContent, true);
-    script.log("safeUpdateDefaults: wrote BaudRate=" + baud + " DataBits=" + parts[0] + " Parity=" + parts[1] + " StopBits=" + parts[2]);
+    script.log("safeUpdateDefaults: wrote baudRate=" + baud + " dataBits=" + parts[0] + " Parity=" + parts[1] + " stopBits=" + parts[2]);
     return true;
 }
 
