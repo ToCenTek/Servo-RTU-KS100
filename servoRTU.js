@@ -456,8 +456,13 @@ function update(deltaTime) {
                     script.log("Verification read failed. Servo may not have applied new params.");
                 } else if (timedOutOp == "set_slave") {
                     script.log("Set slave address failed: no response from slave " + opBaudVal);
-                    script.log("The servo may not be at slave " + opBaudVal + ".");
-                    script.log("If unsure, run Probe Communication to find the actual slave.");
+                    script.log("The servo is NOT actually at slave " + opBaudVal + ".");
+                    script.log("Possible causes:");
+                    script.log("  1. Module serial (baud/dataBits/parity/stopBits) does not match servo.");
+                    script.log("     After Probe Communication, Reload Custom Modules to apply new defaults.");
+                    script.log("  2. Servo is on a different slave address.");
+                    script.log("  3. Wiring issue (485+/485- swapped, or no power to servo).");
+                    script.log("Run Probe Communication to find the actual configuration.");
                 } else {
                     script.log("Operation timeout");
                 }
@@ -871,9 +876,16 @@ function setSlaveAddress(currentSlave, newSlave) {
 
 // Parameters 面板参数变化回调
 function moduleParameterChanged(param) {
-    // Slave Address 改变时, 自动同步确认值(可选)
-    if (param.name == "Slave Address") {
-        // 这里只记录,不主动触发探测
+    // Parameters 中的 Get Communication Trigger: 复用当前 Slave Address 作为扫描目标
+    if (param.niceName == "Get Communication") {
+        var slaveAddr = null;
+        if (local.parameters != null) {
+            slaveAddr = local.parameters.getChild("Slave Address");
+        }
+        var slave = 1;
+        if (slaveAddr != null) slave = slaveAddr.get();
+        // Scan End = Slave Address 表示只扫一个
+        getCommunication(slave, slave);
     }
 }
 
