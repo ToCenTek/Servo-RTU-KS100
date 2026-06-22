@@ -1,21 +1,24 @@
-// Servo RTU KS100 - 极简版
+// Servo RTU KS100 - 简洁版
 // Chataigne Serial Module 硬编码 8N1 (来自 module.json defaults, 运行时改不了).
-// 探测: 用 Chataigne 自家串口扫 baud × slave (8N1 fixed).
+// 探测: 关闭 Chataigne 串口 → Python 扫 baud × mode × slave → force 8N1 → 重开 Chataigne.
 // 操作: Set BaudRate (写 FA-72 + 软复位) / Set Slave Address (写 FA-71).
-// 假设: 伺服默认 8N1 (KS100 出厂默认). 非 8N1 需先用厂家工具改 8N1.
 
 // 状态
 var opActive = false;
-var opType = "";            // "probe" | "set_baud" | "set_slave" | "force_8n1"
+var opType = "";            // "set_baud" | "set_slave" | "force_8n1"
 var opStage = 0;
 var opSlave = 1;
 var opBaudVal = 0;
-var opTime = 0;             // 当前操作已用时间
+var opTime = 0;
 
-var probeBaudIdx = 0;
-var PROBE_BAUDS = [115200, 57600, 38400, 19200, 9600, 4800];
-var probeSwitchTime = 0;    // 切换 baud 后等 300ms 再发读
-var PROBE_SWITCH_DELAY = 0.3;
+var probing = false;
+var probePolls = 0;
+var PROBE_MAX_POLLS = 1200;  // 240s
+var probeRestorePort = "";
+var probeUsedEnable = false;  // 用 setEnabled(false) 关闭的(不同于 setPortName)
+
+var closeTimer = 0;
+var CLOSE_DELAY = 0.3;      // 关闭 Chataigne 串口后等 300ms 让 Python 打开
 
 var resetPending = false;
 var resetTime = 0;
@@ -34,6 +37,10 @@ var REG_FA60 = 0x003C;  // 软复位
 var REG_FA71 = 0x0047;  // 从站地址
 var REG_FA72 = 0x0048;  // 波特率
 var REG_FA73 = 0x0049;  // 协议 (3 = 8N1)
+
+var RESULT_PATH = "/tmp/probe_result.json";
+var SHELL_PATH = "/tmp/probe_ks100.sh";
+var OS_NAME = "Servo OS";
 
 // CRC16-Modbus (查表法, 算术实现避开位运算符)
 var crcTable = null;
@@ -153,72 +160,131 @@ function setSerialSlaveAddress(slave) {
     return true;
 }
 
-// 解析 read 0x03 响应: N 字节数据
-function parseReadResponse(frame, count) {
-    if (frame[1] != 0x03 || frame[2] != count * 2) return null;
-    var regs = [];
-    for (var i = 0; i < count; i++) {
-        regs.push(frame[3 + i * 2] * 256 + frame[4 + i * 2]);
+function getPortName() {
+    var p = findParam("port");
+    if (p == null) return "";
+    return "" + p.get();
+}
+
+function setPortName(name) {
+    var p = findParam("port");
+    if (p == null) return false;
+    p.set(name);
+    return true;
+}
+
+// 启停本模块 (关闭/打开串口, 探测时需关闭避免与 Python pyserial 冲突)
+// Chataigne Serial Module 的 Enabled 参数在 local 顶层 (不是 local.parameters)
+function setModuleEnabled(enabled) {
+    var names = ["Enabled", "enabled", "Enable", "enable", "isEnabled"];
+    for (var i = 0; i < names.length; i++) {
+        var p = local.getChild(names[i]);
+        if (p != null && typeof p.set == "function") {
+            p.set(enabled);
+            return true;
+        }
     }
-    return regs;
+    return false;
 }
 
-// 命令: Get Communication - 用 Chataigne 串口扫 baud (8N1 fixed, slave 1)
+// OS Module (探测时需要 subprocess)
+function ensureOSModule() {
+    var osMod = root.modules.getItemWithName(OS_NAME);
+    if (osMod != null) return osMod;
+    script.log(OS_NAME + " not found, auto-creating...");
+    osMod = root.modules.addItem("OS");
+    if (osMod == null) { script.log("Failed to create OS module"); return null; }
+    osMod.setName(OS_NAME);
+    script.refreshEnvironment();
+    return osMod;
+}
+function removeOSModule() {
+    var osMod = root.modules.getItemWithName(OS_NAME);
+    if (osMod != null) { root.modules.removeItem(osMod); script.refreshEnvironment(); }
+}
+function writeShellWrapper() {
+    var pyPath = script.getScriptDirectory() + "/scripts/probe_servo.py";
+    var content = "#!/bin/bash\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\npython3 \"" + pyPath + "\" \"$@\" 2>/tmp/probe_ks100.log\n";
+    util.writeFile(SHELL_PATH, content, true);
+}
+
+// 命令: Get Communication - 关闭 Chataigne 端口 → Python 探测 (含 force 8N1) → 重开 Chataigne
 function getCommunication() {
-    if (opActive || probeSwitchTime > 0) return;
-    probeBaudIdx = 0;
-    script.log("Probing servo (8N1, slave 1, baud " + PROBE_BAUDS.join("/") + ")...");
-    probeNextBaud();
+    if (opActive || probing || closeTimer > 0) return;
+    var port = getPortName();
+    if (port.length == 0) { script.log("No port configured"); return; }
+    probeRestorePort = port;
+    script.log("Closing Chataigne port for Python probe...");
+    probeUsedEnable = setModuleEnabled(false);
+    if (probeUsedEnable) {
+        script.log("Module disabled via setEnabled");
+    } else {
+        script.log("setEnabled failed, falling back to setPortName");
+        setPortName("");
+    }
+    closeTimer = 0.001;
 }
 
-function probeNextBaud() {
-    if (probeBaudIdx >= PROBE_BAUDS.length) {
-        script.log("Probe failed. No servo at 8N1.");
-        script.log("If servo is 8N2/8E1/8O1, use vendor tool to set 8N1 first.");
+function startPythonProbe() {
+    var osMod = ensureOSModule();
+    if (osMod == null) {
+        script.log("Probe aborted: no OS module");
+        setPortName(probeRestorePort);
         return;
     }
-    var baud = PROBE_BAUDS[probeBaudIdx];
-    script.log("Probe: trying baud " + baud);
-    setSerialBaudRate(baud);
-    probeSwitchTime = 0.001;  // 非零表示正在等切换
+    writeShellWrapper();
+    util.writeFile(RESULT_PATH, '{"success":false,"status":"probing"}', true);
+    if (typeof osMod.launchProcess != "function") {
+        script.log("OS module has no launchProcess");
+        setPortName(probeRestorePort);
+        removeOSModule();
+        return;
+    }
+    script.log("Launching Python probe (8N2/8E1/8O1/8N1 × baud × slave)...");
+    osMod.launchProcess("/bin/bash " + SHELL_PATH + " --output " + RESULT_PATH, false);
+    probing = true;
+    probePolls = 0;
 }
 
-function continueProbe(frame) {
-    if (frame[1] == 0x03) {
-        var regs = parseReadResponse(frame, 3);
-        if (regs == null) { probeBaudIdx++; probeNextBaud(); opActive = false; opType = ""; return; }
-        opActive = false;
-        opType = "";
-        var slave = regs[0];
-        var baud = regs[1] * 100;
-        var fa73 = regs[2];
-        var protoLabel = fa73 == 0 ? "8N2" : fa73 == 1 ? "8E1" : fa73 == 2 ? "8O1" : "8N1";
-        script.log("Probe OK: slave=" + slave + " baud=" + baud + " protocol=" + protoLabel);
-        setSerialBaudRate(baud);
+function onProbeResult(data) {
+    probing = false;
+    removeOSModule();
+    if (data.success) {
+        var baud = data.baud;
+        var slave = data.slave;
+        var proto = data.protocol;
+        script.log("Probe: slave=" + slave + " baud=" + baud + " protocol=" + proto + (data.forced ? " (forced 8N1)" : ""));
+        updateValues(slave, baud, "8N1");
         setSerialSlaveAddress(slave);
-        updateValues(slave, baud, protoLabel);
-        if (fa73 != 3) {
-            startForce8N1(slave, baud);
-        } else {
-            util.showMessageBox("Probe Complete",
-                "Servo found.\n" +
-                "  Slave: " + slave + "\n" +
-                "  Baud:  " + baud + "\n" +
-                "  Protocol: " + protoLabel + "\n\n" +
-                "伺服已找到。",
-                "info", "OK");
+        if (!probeUsedEnable) {
+            setPortName(probeRestorePort);  // 恢复 port (setPortName 路径需要)
         }
+        setSerialBaudRate(baud);
+        setModuleEnabled(true);
+        var detail = "Slave: " + slave + "\nBaud: " + baud + "\nProtocol: " + proto + " (now 8N1)";
+        if (data.forced) {
+            detail = "Servo was " + proto + ", forced to 8N1.\n" + detail;
+        }
+        var detailCN = "从站: " + slave + "\n波特: " + baud + "\n协议: " + proto + " (已强制 8N1)";
+        if (data.forced) {
+            detailCN = "伺服原为 " + proto + ", 已强制为 8N1。\n" + detailCN;
+        }
+        util.showMessageBox("Probe Complete", detail + "\n\n" + detailCN, "info", "OK");
     } else {
-        opActive = false;
-        opType = "";
-        probeBaudIdx++;
-        probeNextBaud();
+        var msg = data.error || "Probe failed";
+        if (data.detail) msg += ": " + data.detail;
+        script.log(msg);
+        if (!probeUsedEnable) {
+            setPortName(probeRestorePort);
+        }
+        setModuleEnabled(true);
+        util.showMessageBox("Probe Failed", msg + "\n\n" + msg, "warning", "OK");
     }
 }
 
-// 命令: Set BaudRate - 写 FA-72 + 软复位
+// 命令: Set BaudRate - 写 FA-72 + 软复位 (servo 已在 8N1)
 function setBaudRate(slave, baud) {
-    if (opActive || probeSwitchTime > 0) return;
+    if (opActive || probing || closeTimer > 0) return;
     var slaveNum = parseInt(slave, 10);
     var baudNum = parseInt(baud, 10);
     if (slaveNum < 1 || slaveNum > 254) return;
@@ -253,15 +319,12 @@ function continueSetBaud(frame) {
 
 // 命令: Set Slave Address - 写 FA-71
 function setSlaveAddress(newSlave) {
-    if (opActive || probeSwitchTime > 0) return;
+    if (opActive || probing || closeTimer > 0) return;
     var newNum = parseInt(newSlave, 10);
     if (newNum < 1 || newNum > 254) return;
     var p = findParam("slaveAddress");
     var currentSlave = (p != null) ? p.get() : 1;
-    if (currentSlave == newNum) {
-        script.log("Slave already " + newNum);
-        return;
-    }
+    if (currentSlave == newNum) { script.log("Slave already " + newNum); return; }
     opActive = true;
     opType = "set_slave";
     opStage = 1;
@@ -286,36 +349,6 @@ function continueSetSlave(frame) {
         "info", "OK");
 }
 
-// 强制伺服为 8N1 (探测成功后, 如果 FA-73 != 3)
-function startForce8N1(slave, baud) {
-    opActive = true;
-    opType = "force_8n1";
-    opStage = 1;
-    opSlave = slave;
-    opBaudVal = baud;
-    script.log("Forcing servo to 8N1...");
-    sendFrame(makeWrite(slave, REG_FA73, 3));
-}
-
-function continueForce8N1(frame) {
-    if (frame[1] != 0x06) {
-        opActive = false; opType = "";
-        script.log("Force 8N1 failed");
-        return;
-    }
-    if (opStage == 1) {
-        opStage = 2;
-        sendFrame(makeWrite(opSlave, REG_FA60, 1));
-        return;
-    }
-    if (opStage == 2) {
-        opActive = false;
-        script.log("Force 8N1: reset sent, waiting...");
-        resetPending = true;
-        resetTime = 0;
-    }
-}
-
 function handleResetComplete() {
     var type = opType;
     opType = "";
@@ -326,16 +359,6 @@ function handleResetComplete() {
         util.showMessageBox("Baud Rate Set",
             "Baud rate set to " + opBaudVal + ".\n\n" +
             "波特率已设置为 " + opBaudVal + "。",
-            "info", "OK");
-    } else if (type == "force_8n1") {
-        setSerialBaudRate(opBaudVal);
-        updateValues(opSlave, opBaudVal, "8N1");
-        script.log("Servo forced to 8N1 at " + opBaudVal);
-        util.showMessageBox("Servo Forced to 8N1",
-            "Servo protocol set to 8N1.\n" +
-            "Communication resumed at " + opBaudVal + ".\n\n" +
-            "伺服协议已设置为 8N1。\n" +
-            "通讯已在 " + opBaudVal + " 下恢复。",
             "info", "OK");
     }
 }
@@ -364,25 +387,17 @@ function dataReceived(data) {
         responseAccumulator += "RX: " + bytesToStr(frame);
         if (responseValue != null) responseValue.set(responseAccumulator);
         if (!opActive) continue;
-        if (opType == "probe") continueProbe(frame);
-        else if (opType == "set_baud") continueSetBaud(frame);
+        if (opType == "set_baud") continueSetBaud(frame);
         else if (opType == "set_slave") continueSetSlave(frame);
-        else if (opType == "force_8n1") continueForce8N1(frame);
     }
 }
 
 function update(deltaTime) {
-    // 等待 baud 切换完成后发读
-    if (probeSwitchTime > 0) {
-        probeSwitchTime += deltaTime;
-        if (probeSwitchTime >= PROBE_SWITCH_DELAY) {
-            probeSwitchTime = 0;
-            opActive = true;
-            opType = "probe";
-            opStage = 1;
-            opSlave = 1;
-            opBaudVal = PROBE_BAUDS[probeBaudIdx];
-            sendFrame(makeRead(1, REG_FA71, 3));
+    if (closeTimer > 0) {
+        closeTimer += deltaTime;
+        if (closeTimer >= CLOSE_DELAY) {
+            closeTimer = 0;
+            startPythonProbe();
         }
         return;
     }
@@ -394,18 +409,27 @@ function update(deltaTime) {
         }
         return;
     }
+    if (probing) {
+        probePolls++;
+        if (probePolls >= PROBE_MAX_POLLS) {
+            probing = false;
+            removeOSModule();
+            setPortName(probeRestorePort);
+            script.log("Probe timeout. Check /tmp/probe_result.json and /tmp/probe_ks100.log");
+        } else if (probePolls % 10 == 0 && util.fileExists(RESULT_PATH)) {
+            var data = util.readFile(RESULT_PATH, true);
+            if (data != null && data.status != "probing") {
+                onProbeResult(data);
+            }
+        }
+        return;
+    }
     if (opActive) {
         opTime += deltaTime;
         if (opTime > 1.0) {
-            var type = opType;
             opActive = false;
             opType = "";
-            if (type == "probe") {
-                probeBaudIdx++;
-                probeNextBaud();
-            } else {
-                script.log(type + " timeout");
-            }
+            script.log("Operation timeout");
         }
     }
 }
@@ -421,17 +445,19 @@ function init() {
         }
     }
     script.setUpdateRate(20);
-    script.log("Servo RTU KS100 loaded (8N1, using Chataigne port for probe)");
+    script.log("Servo RTU KS100 loaded (8N1, Get Comm uses Python probe)");
 }
 
 function moduleParameterChanged(param) {
     if (param.niceName == "Get Communication") getCommunication();
 }
 
-function moduleCleanedUp() {}
+function moduleCleanedUp() {
+    removeOSModule();
+}
 
 function sendRaw(hexCommand) {
-    if (opActive || probeSwitchTime > 0) return;
+    if (opActive || probing || closeTimer > 0) return;
     var body = hexToBytes(hexCommand);
     if (body.length < 2) return;
     responseAccumulator = "";
