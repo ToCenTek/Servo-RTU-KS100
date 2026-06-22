@@ -350,11 +350,40 @@ function serialDefaultsToMode(def) {
     return -1;
 }
 
-// 把验证后的通讯参数写回 module.json 的 defaults,这样 Reload Custom Modules 后
-// 模块会按新参数连接,同时 init() 也能从 defaults 还原 Communication Information 显示
-// 实现: 用字符串正则替换,保留原文件的中文、缩进、换行符风格
-// (如果用 util.writeFile(..., object) JSON.stringify 会把中文转义为 \uXXXX
-//  并把缩进统一为 2 空格,破坏原格式)
+// 在 JSON 文本中替换 "fieldName": <value> 字段值
+// 不用 RegExp (JUCE 引擎不支持), 用 indexOf + charAt + substring 纯字符串操作
+// 返回: 新内容 (如果字段未找到则返回原内容)
+function replaceJsonField(content, fieldName, newValue) {
+    var key = '"' + fieldName + '"';
+    var keyIdx = content.indexOf(key);
+    if (keyIdx < 0) return null;  // 字段不存在
+    // 找冒号 (跳过 key 后的空白)
+    var colonIdx = content.indexOf(':', keyIdx + key.length);
+    if (colonIdx < 0) return null;
+    // 找 value 起始: 跳过冒号后的空白 (空格, \n, \r, \t)
+    var valStart = colonIdx + 1;
+    while (valStart < content.length) {
+        var c = content.charAt(valStart);
+        if (c != ' ' && c != '\n' && c != '\r' && c != '\t') break;
+        valStart++;
+    }
+    // 找 value 结束: 数字找 ,/}, 字符串找 结束的 "
+    var valEnd = valStart;
+    if (valStart < content.length && content.charAt(valStart) == '"') {
+        valEnd = content.indexOf('"', valStart + 1);
+        if (valEnd < 0) return null;
+    } else {
+        while (valEnd < content.length) {
+            var c2 = content.charAt(valEnd);
+            if (c2 == ',' || c2 == '}' || c2 == '\n') break;
+            valEnd++;
+        }
+    }
+    return content.substring(0, valStart) + newValue + content.substring(valEnd);
+}
+
+// 把验证后的通讯参数写回 module.json 的 defaults
+// 用纯字符串操作 (JUCE 引擎不支持 RegExp/match/search)
 function saveModuleDefaults(baud, mode) {
     var dir = script.getScriptDirectory();
     var modulePath = dir + "/module.json";
@@ -369,35 +398,38 @@ function saveModuleDefaults(baud, mode) {
         return false;
     }
     var parts = modeToSerial(mode);
-    var newBaud = '"BaudRate": ' + baud;
-    var newData = '"DataBits": ' + parts[0];
-    var newParity = '"Parity": "' + parts[1] + '"';
-    var newStop = '"StopBits": ' + parts[2];
-    // ES3 不支持正则字面量,改用 new RegExp
-    var reBaud = new RegExp('"BaudRate"\\s*:\\s*\\d+');
-    var reData = new RegExp('"DataBits"\\s*:\\s*\\d+');
-    var reParity = new RegExp('"Parity"\\s*:\\s*"[^"]*"');
-    var reStop = new RegExp('"StopBits"\\s*:\\s*\\d+');
-    if (reBaud.exec(content) == null) {
+    var newBaud = "" + baud;
+    var newData = "" + parts[0];
+    var newParity = '"' + parts[1] + '"';
+    var newStop = "" + parts[2];
+
+    // 验证字段存在 (先检查)
+    if (content.indexOf('"BaudRate"') < 0) {
         script.logWarning("saveModuleDefaults: BaudRate field not found");
         return false;
     }
-    content = content.replace(reBaud, newBaud);
-    content = content.replace(reData, newData);
-    content = content.replace(reParity, newParity);
-    content = content.replace(reStop, newStop);
-    util.writeFile(modulePath, content, true);
+    // 替换 4 个字段
+    var c1 = replaceJsonField(content, "BaudRate", newBaud);
+    if (c1 == null) {
+        script.logWarning("saveModuleDefaults: BaudRate replace failed");
+        return false;
+    }
+    var c2 = replaceJsonField(c1, "DataBits", newData);
+    var c3 = replaceJsonField(c2, "Parity", newParity);
+    var c4 = replaceJsonField(c3, "StopBits", newStop);
+
+    util.writeFile(modulePath, c4, true);
     // 验证: 重新读取看新值是否真的落盘
     var check = util.readFile(modulePath, false);
     if (check == null) {
         script.logWarning("saveModuleDefaults: verification read returned null");
         return false;
     }
-    if (check.indexOf(newBaud) < 0) {
-        script.logWarning("saveModuleDefaults: write did not persist (re-read missing new value)");
+    if (check.indexOf('"BaudRate": ' + newBaud) < 0) {
+        script.logWarning("saveModuleDefaults: write did not persist");
         return false;
     }
-    script.log("saveModuleDefaults: wrote " + newBaud + ", " + newData + ", " + newParity + ", " + newStop);
+    script.log("saveModuleDefaults: wrote BaudRate=" + newBaud + " DataBits=" + newData + " Parity=" + newParity + " StopBits=" + newStop);
     return true;
 }
 
@@ -738,21 +770,22 @@ function saveModuleSlaveAddress(newSlave) {
     var content = util.readFile(modulePath, false);
     if (content == null) return false;
     // 匹配 "Slave Address": { ... "default": N ... } 块中的 default 值
-    // 简单做法: 在 "Slave Address" 块内替换 "default": <digits>
+    // 找 "Slave Address" 字段位置
     var idx = content.indexOf('"Slave Address"');
     if (idx < 0) {
         script.logWarning("saveModuleSlaveAddress: 'Slave Address' field not found");
         return false;
     }
     // 找下一个 parameters 字段("scripts" 之前)作为结束边界
-    // (这样不会误把 commands 部分的 "Slave Address" 也改掉)
     var endIdx = content.indexOf('"scripts"', idx);
     if (endIdx < 0) endIdx = content.length;
+    // 只在这个块内替换 "default": <number>
     var block = content.substring(idx, endIdx);
-    var newBlock = block.replace(
-        new RegExp('"default"\\s*:\\s*\\d+'),
-        '"default": ' + newSlave
-    );
+    var newBlock = replaceJsonField(block, "default", "" + newSlave);
+    if (newBlock == null) {
+        script.logWarning("saveModuleSlaveAddress: 'default' field not found in Slave Address block");
+        return false;
+    }
     content = content.substring(0, idx) + newBlock + content.substring(endIdx);
     util.writeFile(modulePath, content, true);
     return true;
