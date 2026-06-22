@@ -286,27 +286,34 @@ function setSerialConfig(baud, mode) {
     return (baudP != null);
 }
 
+// 把 JS 数组转字符串 (util.getObjectProperties 返回数组但 toString 是 [Array])
+function joinArray(arr, sep) {
+    if (sep == null) sep = ", ";
+    var s = "";
+    for (var i = 0; i < arr.length; i++) {
+        if (i > 0) s = s + sep;
+        s = s + String(arr[i]);
+    }
+    return s;
+}
+
 // 自省: 打印 local 的所有属性和子对象结构
 // 用于诊断 Serial Module 内置参数的实际路径
 function dumpLocal() {
     script.log("=== local introspection ===");
-    if (typeof util.getObjectProperties == "function") {
-        var props = util.getObjectProperties(local);
-        script.log("local props: " + props);
-    } else {
+    if (typeof util.getObjectProperties != "function") {
         script.log("util.getObjectProperties not available");
+        return;
     }
-    if (local.parameters != null && typeof util.getObjectProperties == "function") {
-        var pprops = util.getObjectProperties(local.parameters);
-        script.log("local.parameters props: " + pprops);
-    }
-    // 也试一下其他可能的位置
-    for (var i = 0; i < 5; i++) {
-        var guess = ["", "serial", "Serial", "connection", "Connection"][i];
-        var obj = guess == "" ? local : local.getChild(guess);
-        if (obj != null && typeof util.getObjectProperties == "function") {
-            var gp = util.getObjectProperties(obj);
-            script.log("local" + (guess == "" ? "" : "." + guess) + " props: " + gp);
+    var props = util.getObjectProperties(local);
+    script.log("local: [" + joinArray(props) + "]");
+    // 遍历每个直接子对象, 看它自己有什么属性
+    for (var i = 0; i < props.length; i++) {
+        var name = String(props[i]);
+        var child = local.getChild(name);
+        if (child != null) {
+            var cp = util.getObjectProperties(child);
+            script.log("  local." + name + ": [" + joinArray(cp) + "]");
         }
     }
 }
