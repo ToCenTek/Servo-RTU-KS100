@@ -11,7 +11,7 @@ var probing = false;
 var probeSlave = 1;
 var probePollCount = 0;
 var probeTotalPolls = 0;
-var probeMaxPolls = 120;
+var probeMaxPolls = 1200;  // 240s, 给 1~254 全扫留足时间
 var probeRestoreBaud = 0;
 var probeRestoreMode = -1;
 
@@ -581,15 +581,16 @@ function tryExtractFrame() {
 }
 
 // 命令：获取伺服通信参数
-// 固定从站 1, 扫描所有 baud/mode 组合
-// 实际从站地址从 FA-71 寄存器读出, 不依赖 UI 参数
+// 从站 1 开始扫描, 到 254 为止, 找到第一个有效响应即停止
+// 假设总线上只有 1 个设备
+// 实际从站地址从 FA-71 寄存器读出
 function getCommunication() {
     if (waiting || probing) return;
     probeSlave = 1;
     probing = false;
 
     util.showMessageBox("Please wait...",
-        "探测伺服通信参数 (固定从站 1)...",
+        "探测伺服通信参数 (从 slave 1 开始扫描, 找到即停)...",
         "info", "OK");
 
     if (!trySetModuleEnabled(false)) {
@@ -608,7 +609,7 @@ function getCommunication() {
 
     var cmd = "/bin/bash " + SHELL_PATH + " --output " + RESULT_PATH;
 
-    script.log("Probing servo parameters (slave 1)");
+    script.log("Probing servo parameters (slave 1~254)");
 
     util.writeFile(RESULT_PATH, '{"success":false,"status":"probing"}', true);
 

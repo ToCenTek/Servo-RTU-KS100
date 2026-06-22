@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""KS100 Modbus RTU 通信参数自动探测 (固定从站 1)."""
+"""KS100 Modbus RTU 通信参数自动探测.
+从 slave=1 开始,逐个尝试到 SLAVE_MAX=254,找到第一个有效响应即停止.
+假设总线上只有 1 个设备.
+"""
 import sys
 import json
 import struct
@@ -15,20 +18,17 @@ except ImportError:
     print(msg, file=sys.stderr)
     sys.exit(1)
 
-# KS100 支持的波特率 (用户手册 FA-72, 值 = baud / 100)
 BAUD_RATES = [115200, 57600, 38400, 19200, 9600, 4800]
-# FA-73 寄存器值 -> 协议模式字符串
 MODE_MAP = {0: "8N2", 1: "8E1", 2: "8O1", 3: "8N1"}
-# 协议模式字符串 -> (dataBits, parity, stopBits)
 MODES = {
     "8N1": (8, 'N', 1), "8N2": (8, 'N', 2),
     "8E1": (8, 'E', 1), "8O1": (8, 'O', 1),
 }
+SLAVE_MAX = 254  # Modbus 最大地址
 TIMEOUT = 0.04
 
 
 def crc16(data):
-    """Modbus RTU CRC16 (多项式 0xA001, 初值 0xFFFF), 返回小端 2 字节."""
     crc = 0xFFFF
     for b in data:
         crc ^= b
@@ -40,11 +40,8 @@ def crc16(data):
     return struct.pack('<H', crc)
 
 
-def try_mode(port, baud, mode_key, slave=1):
-    """在指定 (port, baud, mode) 组合下尝试用 Modbus 0x03 读 0x0047~0x0049.
-    固定从站 1. 实际站号从响应帧 FA-71 读出 (resp[3..4]).
-    返回 None (无响应/异常) 或 dict (成功).
-    """
+def try_mode(port, baud, mode_key, slave):
+    """Modbus 0x03 读 0x0047~0x0049. 成功返回 dict, 失败返回 None."""
     db, par, sb = MODES[mode_key]
     try:
         ser = serial.Serial(port, baud, bytesize=db, parity=par,
@@ -53,8 +50,6 @@ def try_mode(port, baud, mode_key, slave=1):
         ser.write(body + crc16(body))
         resp = ser.read(256)
         ser.close()
-        # 响应帧: ADR(1) FUNC(1) BC(1) DATA(2N) CRC(2) = 5+2N
-        # 读 3 字, BC=6, 总长 11. 至少 11 字节且 FUNC=0x03 才算成功
         if len(resp) >= 11 and resp[1] == 0x03:
             fa72 = resp[5] * 256 + resp[6]
             fa73 = resp[7] * 256 + resp[8]
@@ -92,19 +87,20 @@ def main():
             json.dump({"success": False, "error": "未检测到串口设备"}, f)
         sys.exit(1)
 
-    # 固定从站 1, 扫描 6 波特率 × 4 协议. 总线只 1 个设备.
-    for baud in BAUD_RATES:
-        for mode_key in ["8N1", "8N2", "8E1", "8O1"]:
-            for p in ports:
-                r = try_mode(p, baud, mode_key)
-                if r:
-                    with open(output, 'w') as f:
-                        json.dump(r, f)
-                    print(json.dumps(r))
-                    sys.exit(0)
+    # 从 slave=1 开始, 逐个尝试到 SLAVE_MAX, 找到第一个有效响应即停止.
+    for slave in range(1, SLAVE_MAX + 1):
+        for baud in BAUD_RATES:
+            for mode_key in ["8N1", "8N2", "8E1", "8O1"]:
+                for p in ports:
+                    r = try_mode(p, baud, mode_key, slave)
+                    if r:
+                        with open(output, 'w') as f:
+                            json.dump(r, f)
+                        print(json.dumps(r))
+                        sys.exit(0)
 
     with open(output, 'w') as f:
-        json.dump({"success": False, "error": "未找到伺服 (slave 1)"}, f)
+        json.dump({"success": False, "error": "未找到伺服 (扫 slave 1~{})".format(SLAVE_MAX)}, f)
     sys.exit(1)
 
 
