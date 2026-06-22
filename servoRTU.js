@@ -378,10 +378,10 @@ function readCurrentDefaults() {
         }
         return block.substring(start, end);
     }
-    var baudStr = getVal("BaudRate");
-    var dataStr = getVal("DataBits");
+    var baudStr = getVal("baudRate");
+    var dataStr = getVal("dataBits");
     var parity = getVal("Parity");
-    var stopStr = getVal("StopBits");
+    var stopStr = getVal("stopBits");
     return {
         BaudRate: baudStr == null ? -1 : parseInt(baudStr, 10),
         DataBits: dataStr == null ? -1 : parseInt(dataStr, 10),
@@ -431,15 +431,17 @@ function safeUpdateDefaults(baud, mode) {
     script.log("safeUpdateDefaults: strIndexOf Parity=" + strIndexOf(block, '"Parity"'));
     script.log("safeUpdateDefaults: strIndexOf StopBits=" + strIndexOf(block, '"StopBits"'));
     var parts = modeToSerial(mode);
-    var c1 = replaceJsonField(block, "BaudRate", "" + baud);
-    if (c1 == null) { script.logWarning("safeUpdateDefaults: BaudRate not found in block"); return false; }
-    script.log("safeUpdateDefaults: c1 len=" + c1.length + " DataBits in c1=" + (strIndexOf(c1, '"DataBits"') >= 0));
-    var c2 = replaceJsonField(c1, "DataBits", "" + parts[0]);
-    if (c2 == null) { script.logWarning("safeUpdateDefaults: DataBits not found in block"); return false; }
+    // Chataigne Serial Module 用小写字段名: baudRate, dataBits, Parity, stopBits
+    // (但 Parity 是单词, 大写)
+    var c1 = replaceJsonField(block, "baudRate", "" + baud);
+    if (c1 == null) { script.logWarning("safeUpdateDefaults: baudRate not found in block"); return false; }
+    script.log("safeUpdateDefaults: c1 len=" + c1.length + " dataBits in c1=" + (strIndexOf(c1, '"dataBits"') >= 0));
+    var c2 = replaceJsonField(c1, "dataBits", "" + parts[0]);
+    if (c2 == null) { script.logWarning("safeUpdateDefaults: dataBits not found in block"); return false; }
     var c3 = replaceJsonField(c2, "Parity", '"' + parts[1] + '"');
     if (c3 == null) { script.logWarning("safeUpdateDefaults: Parity not found in block"); return false; }
-    var c4 = replaceJsonField(c3, "StopBits", "" + parts[2]);
-    if (c4 == null) { script.logWarning("safeUpdateDefaults: StopBits not found in block"); return false; }
+    var c4 = replaceJsonField(c3, "stopBits", "" + parts[2]);
+    if (c4 == null) { script.logWarning("safeUpdateDefaults: stopBits not found in block"); return false; }
     var newContent = content.substring(0, braceStart) + c4 + content.substring(blockEnd);
     if (typeof JSON.parse == "function") {
         JSON.parse(newContent);
