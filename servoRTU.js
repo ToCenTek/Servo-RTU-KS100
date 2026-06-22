@@ -431,57 +431,6 @@ function replaceJsonField(content, fieldName, newValue) {
     return content.substring(0, valStart) + newValue + content.substring(valEnd);
 }
 
-// 把验证后的通讯参数写回 module.json 的 defaults
-// 用纯字符串操作 (JUCE 引擎不支持 RegExp/match/search)
-function saveModuleDefaults(baud, mode) {
-    var dir = script.getScriptDirectory();
-    var modulePath = dir + "/module.json";
-    script.log("saveModuleDefaults: dir=" + dir);
-    if (!util.fileExists(modulePath)) {
-        script.logWarning("saveModuleDefaults: file not found at " + modulePath);
-        return false;
-    }
-    var content = util.readFile(modulePath, false);
-    if (content == null) {
-        script.logWarning("saveModuleDefaults: readFile returned null");
-        return false;
-    }
-    var parts = modeToSerial(mode);
-    var newBaud = "" + baud;
-    var newData = "" + parts[0];
-    var newParity = '"' + parts[1] + '"';
-    var newStop = "" + parts[2];
-
-    // 验证字段存在 (先检查)
-    if (strIndexOf(content, '"BaudRate"') < 0) {
-        script.logWarning("saveModuleDefaults: BaudRate field not found");
-        return false;
-    }
-    // 替换 4 个字段
-    var c1 = replaceJsonField(content, "BaudRate", newBaud);
-    if (c1 == null) {
-        script.logWarning("saveModuleDefaults: BaudRate replace failed");
-        return false;
-    }
-    var c2 = replaceJsonField(c1, "DataBits", newData);
-    var c3 = replaceJsonField(c2, "Parity", newParity);
-    var c4 = replaceJsonField(c3, "StopBits", newStop);
-
-    util.writeFile(modulePath, c4, true);
-    // 验证: 重新读取看新值是否真的落盘
-    var check = util.readFile(modulePath, false);
-    if (check == null) {
-        script.logWarning("saveModuleDefaults: verification read returned null");
-        return false;
-    }
-    if (strIndexOf(check, '"BaudRate": ' + newBaud) < 0) {
-        script.logWarning("saveModuleDefaults: write did not persist");
-        return false;
-    }
-    script.log("saveModuleDefaults: wrote BaudRate=" + newBaud + " DataBits=" + newData + " Parity=" + newParity + " StopBits=" + newStop);
-    return true;
-}
-
 // 模块初始化：获取值对象引用
 function init() {
     if (local.values != null) {
@@ -756,26 +705,22 @@ function continueSetComm(frame) {
     }
 }
 
-// 软复位等待结束: 写 module.json defaults,弹窗提示用户 Reload Custom Modules
-// 不自动切模块串口(Chataigne Serial Module 的 param.set 不一定触发重连),
-// 不自动读回验证(需要切换串口,见上)。0x06 响应是请求回显,3 步都收到回显
-// 本身就证明伺服已收到并执行,设置已应用。
+// 软复位等待结束: 同步 Chataigne Serial Module 内置参数, 调 init() 重新初始化
+// 不再修改 module.json 文件 (避免格式破坏)
+// 流程: setSerialConfig() 设置 BaudRate/DataBits/Parity/StopBits
+//        Chataigne 听到变化自动让 Serial Module 重连串口
+//        init() 重新解析 parameters + 更新 values 显示
 function handleResetComplete() {
-    var saved = saveModuleDefaults(opBaudVal, opModeVal);
-    if (saved) {
-        script.log("module.json defaults updated to " + opBaudVal + " " + modeLabel(opModeVal));
+    // 1) 同步 Serial Module 内置参数
+    var ok = setSerialConfig(opBaudVal, opModeVal);
+    if (ok) {
+        script.log("Module serial params set: " + opBaudVal + " " + modeLabel(opModeVal));
     } else {
-        script.logWarning("Failed to update module.json defaults");
+        script.logWarning("Module serial params not found by name; update manually");
     }
-    // 持久化 Communication Information 显示(即使 Reload 之前用户也能看到)
-    confirmedBaud = opBaudVal;
-    confirmedMode = opModeVal;
-    confirmedSlave = opSlave;
-    if (baudRateValue != null) baudRateValue.set("" + opBaudVal);
-    if (protocolValue != null) protocolValue.set(modeLabel(opModeVal));
-    // 弹窗提示用户手动 Reload Custom Modules 让 defaults 生效
-    // 注意: showMessageBox 的按钮只是标签,无回调,不会触发 Reload
-    // Chataigne 引擎没有提供 reloadModules() API,必须用户在 UI 手动操作
+    // 2) 重新 init (重新解析 parameters, 更新 values 显示)
+    init();
+    // 3) 弹窗提示
     util.showMessageBox(
         "Servo Communication Updated",
         "Servo communication updated.\n" +
@@ -783,66 +728,23 @@ function handleResetComplete() {
         "  Baud:  " + opBaudVal + "\n" +
         "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "module.json defaults have been updated.\n" +
-        "To apply the new defaults, manually Reload Custom Modules:\n" +
-        "  Module menu > Reload Custom Modules\n" +
-        "(or use the keyboard shortcut shown in that menu)\n" +
-        "\n" +
-        "If the new params differ from current module serial, the\n" +
-        "module cannot talk to the servo until you Reload.\n" +
-        "If params are unchanged, no Reload is needed.\n" +
-        "\n" +
-        "----------------------------------------------------------\n" +
+        "The module's serial params have been applied.\n" +
+        "If the new params differ from previous, Chataigne\n" +
+        "auto-reconnects the Serial Module.\n" +
         "\n" +
         "伺服通讯已更新。\n" +
-        "  - 从站:  " + opSlave + "\n" +
-        "  - 波特:  " + opBaudVal + "\n" +
-        "  - 模式:  " + modeLabel(opModeVal) + "\n" +
+        "  从站:  " + opSlave + "\n" +
+        "  波特:  " + opBaudVal + "\n" +
+        "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "module.json 默认参数已更新。\n" +
-        "要应用新默认参数, 请删除当前模块, 并重新加载自定义模块:\n" +
-        "  File > Reload Custom Modules\n" +
-        "\n" +
-        "如果新参数与当前模块串口不同, 重新加载前模块可能无法与伺服通信。\n" +
-        "如果参数未变, 则无需重新加载",
+        "模块串口参数已应用, 如有变化 Chataigne 自动重连。",
         "info",
         "OK"
     );
 }
 
-// 把从站地址同步到 module.json 的 parameters.Slave Address.default
-// (Reload Modules 后这个值会作为 UI 参数的初始值)
-function saveModuleSlaveAddress(newSlave) {
-    var dir = script.getScriptDirectory();
-    var modulePath = dir + "/module.json";
-    if (!util.fileExists(modulePath)) return false;
-    var content = util.readFile(modulePath, false);
-    if (content == null) return false;
-    // 匹配 "Slave Address": { ... "default": N ... } 块中的 default 值
-    // 找 "Slave Address" 字段位置
-    var idx = strIndexOf(content, '"Slave Address"');
-    if (idx < 0) {
-        script.logWarning("saveModuleSlaveAddress: 'Slave Address' field not found");
-        return false;
-    }
-    // 找下一个 parameters 字段("scripts" 之前)作为结束边界
-    var endIdx = strIndexOf(content, '"scripts"', idx);
-    if (endIdx < 0) endIdx = content.length;
-    // 只在这个块内替换 "default": <number>
-    var block = content.substring(idx, endIdx);
-    var newBlock = replaceJsonField(block, "default", "" + newSlave);
-    if (newBlock == null) {
-        script.logWarning("saveModuleSlaveAddress: 'default' field not found in Slave Address block");
-        return false;
-    }
-    content = content.substring(0, idx) + newBlock + content.substring(endIdx);
-    util.writeFile(modulePath, content, true);
-    return true;
-}
-
 // 多步操作：写 FA-71 从站地址
-// 成功后: 同步更新 module.json parameters.Slave Address.default, 更新 UI 参数
-// (Reload Modules 后会用新默认值)
+// 成功后: 同步更新 UI 中的 Slave Address 参数
 function continueSetSlave(frame) {
     if (frame[1] != 0x06) {
         opActive = false;
@@ -859,12 +761,7 @@ function continueSetSlave(frame) {
         var slaveParam = local.parameters.getChild("Slave Address");
         if (slaveParam != null) slaveParam.set(opSlave);
     }
-    // 持久化到 module.json
-    if (saveModuleSlaveAddress(opSlave)) {
-        script.log("module.json Slave Address default updated to " + opSlave);
-    } else {
-        script.logWarning("Failed to update module.json Slave Address");
-    }
+    // 不再修改 module.json, 只更新 UI 参数 (已有, 见 760 行)
     script.log("Slave address updated to " + opSlave);
     util.showMessageBox(
         "Slave Address Updated",
