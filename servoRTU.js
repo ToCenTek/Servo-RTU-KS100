@@ -12,7 +12,7 @@ var opBaudVal = 0;
 
 var probing = false;
 var probePolls = 0;
-const PROBE_MAX_POLLS = 600;    // ~120s
+var PROBE_MAX_POLLS = 600;    // ~120s
 
 var waiting = false;
 var waitTime = 0;
@@ -20,7 +20,7 @@ var rxBuffer = [];
 
 var resetPending = false;
 var resetWaitTime = 0;
-const RESET_WAIT_SEC = 2.5;
+var RESET_WAIT_SEC = 2.5;
 
 var responseValue = null;
 var baudRateValue = null;
@@ -30,14 +30,14 @@ var responseAccumulator = "";
 var lastSentHex = "";
 
 // 寄存器
-const REG_FA60 = 0x003C;  // 软复位 (写 1 触发)
-const REG_FA71 = 0x0047;  // 从站地址
-const REG_FA72 = 0x0048;  // 波特率 (值 = baud/100)
-const REG_FA73 = 0x0049;  // 协议 (3 = 8N1)
+var REG_FA60 = 0x003C;  // 软复位 (写 1 触发)
+var REG_FA71 = 0x0047;  // 从站地址
+var REG_FA72 = 0x0048;  // 波特率 (值 = baud/100)
+var REG_FA73 = 0x0049;  // 协议 (3 = 8N1)
 
-const RESULT_PATH = "/tmp/probe_result.json";
-const SHELL_PATH = "/tmp/probe_ks100.sh";
-const OS_NAME = "Servo OS";
+var RESULT_PATH = "/tmp/probe_result.json";
+var SHELL_PATH = "/tmp/probe_ks100.sh";
+var OS_NAME = "Servo OS";
 
 // CRC16-Modbus (查表法, 多项式 0xA001, 算术实现避开位运算符)
 var crcTable = null;
