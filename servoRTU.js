@@ -177,10 +177,11 @@ function makeWrite(slave, reg, value) {
 }
 
 // 追加 CRC → 发送 → 记录 TX 日志
+// 不清空 responseAccumulator,以便多命令串联(Set Communication 内部 2 帧)时
+// 所有 RX 响应按时间顺序累积到 Last Response,便于回溯完整执行过程。
 function sendFrame(bytes) {
     var frame = appendCRC(bytes);
     lastSentHex = bytesToHex(frame);
-    responseAccumulator = "";
     rxBuffer = [];
     waiting = true;
     waitTime = 0;
@@ -554,5 +555,6 @@ function sendRaw(hexCommand) {
     if (waiting || probing || opActive) return;
     var body = hexToBytes(hexCommand);
     if (body.length < 2) return;
+    responseAccumulator = "";
     sendFrame(body);
 }
