@@ -307,6 +307,10 @@ function writeShellWrapper() {
     content = content + "export PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\n";
     content = content + "python3 \"" + pyPath + "\" \"$@\" 2>\"" + logPath + "\"\n";
     util.writeFile(SHELL_PATH, content, true);
+    script.log("Shell wrapper written: " + SHELL_PATH);
+    script.log("Python path: " + pyPath);
+    // 也直接尝试给 shell wrapper 加执行权限 (macOS/Linux)
+    // 注: ES3 没有 chmod API, 只能靠 util.writeFile 保留执行位
 }
 
 // 更新探测结果到 Communication Information
@@ -495,7 +499,7 @@ function update(deltaTime) {
                     if (data.success) {
                         updateDetectedValues(data.baud, data.slave, data.fa73);
                         setSerialConfig(data.baud, data.fa73);
-                        script.log("Probe complete, parameters updated");
+                        script.log("Probe complete: " + data.baud + " " + data.protocol + " slave " + data.slave);
                     } else {
                         var errMsg = "Probe failed";
                         if (data.error) errMsg = data.error;
@@ -508,7 +512,10 @@ function update(deltaTime) {
                 probing = false;
                 removeOSModule();
                 trySetModuleEnabled(true);
-                script.log("Probe timeout (60s), check serial and Python");
+                script.log("Probe timeout (" + (probeMaxPolls * 2) + "s). Check:");
+                script.log("  - /tmp/probe_result.json (should exist after probe)");
+                script.log("  - /tmp/probe_ks100.log (Python stderr)");
+                script.log("  - OS module has launchProcess");
             }
         }
     }
@@ -610,11 +617,16 @@ function getCommunication() {
     var cmd = "/bin/bash " + SHELL_PATH + " --output " + RESULT_PATH;
 
     script.log("Probing servo parameters (slave 1~254)");
+    script.log("Probe cmd: " + cmd);
+    script.log("Probe script dir: " + script.getScriptDirectory());
 
     util.writeFile(RESULT_PATH, '{"success":false,"status":"probing"}', true);
 
     if (typeof osMod.launchProcess == "function") {
-        osMod.launchProcess(cmd);
+        script.log("Launching probe process (non-blocking)...");
+        // 第二参数 blocking=false: 非阻塞, 不能让 JS 引擎卡住
+        osMod.launchProcess(cmd, false);
+        script.log("Probe process launched");
     } else {
         script.log("OS module has no launchProcess, run manually:");
         script.log(cmd);
