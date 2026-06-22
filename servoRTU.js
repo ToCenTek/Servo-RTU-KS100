@@ -581,22 +581,22 @@ function tryExtractFrame() {
 }
 
 // 命令：获取伺服通信参数（外部 Python 脚本）
+// 固定扫 slave=1, 不依赖 parameters.Slave Address
 // 前提: 总线上同时只能有 1 个从站(其他从站断电), 否则多从站同时
 //       响应会导致 Modbus CRC 错误,探测失败
-function getCommunication(slaveAddr) {
+// 如果伺服不在 1,需先用驱动器面板或其他方式把 FA-71 改回 1
+function getCommunication() {
     if (waiting || probing) return;
-    if (slaveAddr == null || slaveAddr < 1 || slaveAddr > 254) {
-        slaveAddr = 1;
-    }
-    probeSlave = slaveAddr;
+    probeSlave = 1;  // 固定扫 slave=1
     probing = false;
 
     util.showMessageBox("Please wait...",
-        "探测伺服通信参数 (slave " + slaveAddr + "), 这需要一些时间...\n" +
+        "探测伺服通信参数 (固定扫 slave=1), 这需要一些时间...\n" +
         "完成后将重新使能当前模块\n" +
         "请将通信参数设置为伺服一致\n" +
         "\n" +
-        "Detecting servo communication parameters (slave " + slaveAddr + ")...",
+        "确保总线上只有 1 个从站, 且该从站地址为 1\n" +
+        "Detecting servo: scan slave=1 only...",
         "info", "OK");
 
     if (!trySetModuleEnabled(false)) {
@@ -832,12 +832,9 @@ function setCommunication(slave, baud, mode) {
 }
 
 // 命令: Get Communication (命令面板触发)
-// 接受 Slave Address 一个参数
-// 注意: 与 Parameters.Slave Address 参数的区别 — 命令参数是 UI 临时值,
-//       不影响 module.json defaults,也不会被 init() 还原
-function probeCommunication(slaveAddr) {
-    if (slaveAddr == null) slaveAddr = 1;
-    getCommunication(slaveAddr);
+// 无参数, 固定扫 slave=1, 不依赖 parameters.Slave Address
+function probeCommunication() {
+    getCommunication();
 }
 
 // 命令：设置从站地址
@@ -865,15 +862,9 @@ function setSlaveAddress(currentSlave, newSlave) {
 
 // Parameters 面板参数变化回调
 function moduleParameterChanged(param) {
-    // Parameters 中的 Get Communication Trigger: 用当前 Slave Address 作为扫描目标
+    // Parameters 中的 Get Communication Trigger: 固定扫 slave=1, 不读 parameters.Slave Address
     if (param.niceName == "Get Communication") {
-        var slaveAddr = null;
-        if (local.parameters != null) {
-            slaveAddr = local.parameters.getChild("Slave Address");
-        }
-        var slave = 1;
-        if (slaveAddr != null) slave = slaveAddr.get();
-        getCommunication(slave);
+        getCommunication();
     }
 }
 

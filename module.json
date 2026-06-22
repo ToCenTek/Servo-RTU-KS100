@@ -24,11 +24,11 @@
             "default": 1,
             "min": 1,
             "max": 254,
-            "description": "从站地址 (1~254)\nSlave address used for all Modbus commands and as default scan start"
+            "description": "从站地址 (1~254, 用于所有 Modbus 命令, Get Communication 不依赖此值)\nSlave address (1~254) used for all Modbus commands. Get Communication does not use this."
         },
         "Get Communication": {
             "type": "Trigger",
-            "description": "探测伺服通信参数 (使用 Slave Address 作为目标)\nProbe servo communication parameters using current Slave Address"
+            "description": "探测伺服通信参数 (固定扫 slave=1, 总线上需只有一个设备)\nProbe servo: scan slave=1 only (bus must have exactly one device)"
         }
     },
     "values": {
@@ -74,16 +74,8 @@
         "Get Communication": {
             "menu": "Settings",
             "callback": "probeCommunication",
-            "description": "自动探索伺服通信参数: 遍历波特率 4800~115200, 探测指定 Slave Address 的从站\nAuto-detect servo: scan baud 4800~115200, probe one slave address",
+            "description": "自动探索伺服通信参数: 遍历波特率 4800~115200, 固定扫 slave=1\nAuto-detect servo: scan baud 4800~115200, scan slave=1 only",
             "parameters": {
-                "Slave Address": {
-                    "type": "Integer",
-                    "hexMode": true,
-                    "description": "要探测的从站地址 (1~254)\nSlave address to probe",
-                    "default": 1,
-                    "min": 1,
-                    "max": 254
-                }
             }
         },
         "Set Communication": {
