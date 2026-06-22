@@ -380,27 +380,46 @@ function serialDefaultsToMode(def) {
     return -1;
 }
 
+// 手写 indexOf (JUCE 引擎不支持 s.indexOf)
+// 在 s 中找 sub, 找到返回索引, 找不到返回 -1
+// start: 可选起始位置
+function strIndexOf(s, sub, start) {
+    if (sub.length == 0) return start || 0;
+    if (start == null) start = 0;
+    if (s.length < sub.length + start) return -1;
+    var lastStart = s.length - sub.length;
+    for (var i = start; i <= lastStart; i++) {
+        var match = true;
+        for (var j = 0; j < sub.length; j++) {
+            if (s.charAt(i + j) != sub.charAt(j)) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return i;
+    }
+    return -1;
+}
+
 // 在 JSON 文本中替换 "fieldName": <value> 字段值
-// 不用 RegExp (JUCE 引擎不支持), 用 indexOf + charAt + substring 纯字符串操作
-// 返回: 新内容 (如果字段未找到则返回原内容)
+// 不用 RegExp, 不用 String.indexOf (JUCE 引擎不支持), 用 strIndexOf + charAt + substring
 function replaceJsonField(content, fieldName, newValue) {
     var key = '"' + fieldName + '"';
-    var keyIdx = content.indexOf(key);
-    if (keyIdx < 0) return null;  // 字段不存在
-    // 找冒号 (跳过 key 后的空白)
-    var colonIdx = content.indexOf(':', keyIdx + key.length);
+    var keyIdx = strIndexOf(content, key);
+    if (keyIdx < 0) return null;
+    var colonIdx = strIndexOf(content, ':', keyIdx);  // 找 key 后的冒号
     if (colonIdx < 0) return null;
-    // 找 value 起始: 跳过冒号后的空白 (空格, \n, \r, \t)
+    // 找 value 起始: 跳过冒号后的空白
     var valStart = colonIdx + 1;
     while (valStart < content.length) {
         var c = content.charAt(valStart);
         if (c != ' ' && c != '\n' && c != '\r' && c != '\t') break;
         valStart++;
     }
-    // 找 value 结束: 数字找 ,/}, 字符串找 结束的 "
+    // 找 value 结束
     var valEnd = valStart;
     if (valStart < content.length && content.charAt(valStart) == '"') {
-        valEnd = content.indexOf('"', valStart + 1);
+        valEnd = strIndexOf(content, '"', valStart + 1);
         if (valEnd < 0) return null;
     } else {
         while (valEnd < content.length) {
@@ -434,7 +453,7 @@ function saveModuleDefaults(baud, mode) {
     var newStop = "" + parts[2];
 
     // 验证字段存在 (先检查)
-    if (content.indexOf('"BaudRate"') < 0) {
+    if (strIndexOf(content, '"BaudRate"') < 0) {
         script.logWarning("saveModuleDefaults: BaudRate field not found");
         return false;
     }
@@ -455,7 +474,7 @@ function saveModuleDefaults(baud, mode) {
         script.logWarning("saveModuleDefaults: verification read returned null");
         return false;
     }
-    if (check.indexOf('"BaudRate": ' + newBaud) < 0) {
+    if (strIndexOf(check, '"BaudRate": ' + newBaud) < 0) {
         script.logWarning("saveModuleDefaults: write did not persist");
         return false;
     }
@@ -801,13 +820,13 @@ function saveModuleSlaveAddress(newSlave) {
     if (content == null) return false;
     // 匹配 "Slave Address": { ... "default": N ... } 块中的 default 值
     // 找 "Slave Address" 字段位置
-    var idx = content.indexOf('"Slave Address"');
+    var idx = strIndexOf(content, '"Slave Address"');
     if (idx < 0) {
         script.logWarning("saveModuleSlaveAddress: 'Slave Address' field not found");
         return false;
     }
     // 找下一个 parameters 字段("scripts" 之前)作为结束边界
-    var endIdx = content.indexOf('"scripts"', idx);
+    var endIdx = strIndexOf(content, '"scripts"', idx);
     if (endIdx < 0) endIdx = content.length;
     // 只在这个块内替换 "default": <number>
     var block = content.substring(idx, endIdx);
