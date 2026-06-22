@@ -341,19 +341,22 @@ function serialDefaultsToMode(def) {
 
 // 把验证后的通讯参数写回 module.json 的 defaults,这样 Reload Custom Modules 后
 // 模块会按新参数连接,同时 init() 也能从 defaults 还原 Communication Information 显示
+// 实现: 用字符串正则替换,保留原文件的中文、缩进、换行符风格
+// (如果用 util.writeFile(..., object) JSON.stringify 会把中文转义为 \uXXXX
+//  并把缩进统一为 2 空格,破坏原格式)
 function saveModuleDefaults(baud, mode) {
     var dir = script.getScriptDirectory();
     var modulePath = dir + "/module.json";
     if (!util.fileExists(modulePath)) return false;
-    var json = util.readFile(modulePath, true);
-    if (json == null) return false;
-    if (json.defaults == null) json.defaults = {};
-    json.defaults.BaudRate = baud;
+    var content = util.readFile(modulePath, false);
+    if (content == null) return false;
     var parts = modeToSerial(mode);
-    json.defaults.DataBits = parts[0];
-    json.defaults.Parity = parts[1];
-    json.defaults.StopBits = parts[2];
-    util.writeFile(modulePath, json, true);
+    // ES3 不支持正则字面量,改用 new RegExp
+    content = content.replace(new RegExp('"BaudRate"\\s*:\\s*\\d+'), '"BaudRate": ' + baud);
+    content = content.replace(new RegExp('"DataBits"\\s*:\\s*\\d+'), '"DataBits": ' + parts[0]);
+    content = content.replace(new RegExp('"Parity"\\s*:\\s*"[^"]*"'), '"Parity": "' + parts[1] + '"');
+    content = content.replace(new RegExp('"StopBits"\\s*:\\s*\\d+'), '"StopBits": ' + parts[2]);
+    util.writeFile(modulePath, content, true);
     return true;
 }
 
