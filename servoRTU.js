@@ -347,16 +347,46 @@ function serialDefaultsToMode(def) {
 function saveModuleDefaults(baud, mode) {
     var dir = script.getScriptDirectory();
     var modulePath = dir + "/module.json";
-    if (!util.fileExists(modulePath)) return false;
+    script.log("saveModuleDefaults: dir=" + dir);
+    if (!util.fileExists(modulePath)) {
+        script.logWarning("saveModuleDefaults: file not found at " + modulePath);
+        return false;
+    }
     var content = util.readFile(modulePath, false);
-    if (content == null) return false;
+    if (content == null) {
+        script.logWarning("saveModuleDefaults: readFile returned null");
+        return false;
+    }
     var parts = modeToSerial(mode);
+    var newBaud = '"BaudRate": ' + baud;
+    var newData = '"DataBits": ' + parts[0];
+    var newParity = '"Parity": "' + parts[1] + '"';
+    var newStop = '"StopBits": ' + parts[2];
     // ES3 不支持正则字面量,改用 new RegExp
-    content = content.replace(new RegExp('"BaudRate"\\s*:\\s*\\d+'), '"BaudRate": ' + baud);
-    content = content.replace(new RegExp('"DataBits"\\s*:\\s*\\d+'), '"DataBits": ' + parts[0]);
-    content = content.replace(new RegExp('"Parity"\\s*:\\s*"[^"]*"'), '"Parity": "' + parts[1] + '"');
-    content = content.replace(new RegExp('"StopBits"\\s*:\\s*\\d+'), '"StopBits": ' + parts[2]);
+    var reBaud = new RegExp('"BaudRate"\\s*:\\s*\\d+');
+    var reData = new RegExp('"DataBits"\\s*:\\s*\\d+');
+    var reParity = new RegExp('"Parity"\\s*:\\s*"[^"]*"');
+    var reStop = new RegExp('"StopBits"\\s*:\\s*\\d+');
+    if (content.match(reBaud) == null) {
+        script.logWarning("saveModuleDefaults: BaudRate field not found");
+        return false;
+    }
+    content = content.replace(reBaud, newBaud);
+    content = content.replace(reData, newData);
+    content = content.replace(reParity, newParity);
+    content = content.replace(reStop, newStop);
     util.writeFile(modulePath, content, true);
+    // 验证: 重新读取看新值是否真的落盘
+    var check = util.readFile(modulePath, false);
+    if (check == null) {
+        script.logWarning("saveModuleDefaults: verification read returned null");
+        return false;
+    }
+    if (check.indexOf(newBaud) < 0) {
+        script.logWarning("saveModuleDefaults: write did not persist (re-read missing new value)");
+        return false;
+    }
+    script.log("saveModuleDefaults: wrote " + newBaud + ", " + newData + ", " + newParity + ", " + newStop);
     return true;
 }
 
