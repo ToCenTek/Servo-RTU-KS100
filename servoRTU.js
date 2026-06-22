@@ -116,6 +116,11 @@ function makeWrite(slave, reg, value) {
 function appendLog(prefix, line) {
     if (responseAccumulator.length > 0) responseAccumulator += "\n";
     responseAccumulator += prefix + ": " + line;
+    // 懒加载: 如果缓存引用是 null, 实时查找
+    if (responseValue == null && local.values != null) {
+        var ci = local.values.getChild("Communication Information");
+        if (ci != null) responseValue = ci.getChild("Last Response");
+    }
     if (responseValue != null) responseValue.set(responseAccumulator);
 }
 
@@ -138,12 +143,20 @@ function findParam(name) {
     return local.getChild(name);
 }
 
-function updateValues(slave, baud, protocol) {
-    if (slaveAddressValue != null) slaveAddressValue.set("" + slave);
-    if (baudRateValue != null) baudRateValue.set("" + baud);
-    if (protocolValue != null) protocolValue.set(protocol);
+// 从 local.values 重新获取子引用 (避免 init 时缓存的引用失效), 同时更新缓存
+function setCommunicationValues(slave, baud, protocol, info) {
+    if (local.values == null) return;
     var ci = local.values.getChild("Communication Information");
-    if (ci != null) ci.setCollapsed(false);
+    if (ci == null) return;
+    var sa = ci.getChild("Slave Address");
+    var br = ci.getChild("Baud Rate");
+    var pr = ci.getChild("Protocol");
+    var lr = ci.getChild("Last Response");
+    if (sa != null) { sa.set("" + slave); slaveAddressValue = sa; }
+    if (br != null) { br.set("" + baud); baudRateValue = br; }
+    if (pr != null) { pr.set(protocol); protocolValue = pr; }
+    if (lr != null && info != null) { lr.set(info); responseValue = lr; }
+    ci.setCollapsed(false);
 }
 
 function getPortName() {
@@ -242,20 +255,25 @@ function showProbeResult(data) {
 
 function onProbeResult(data) {
     probing = false;
+    // 先恢复 Chataigne 串口 (setModuleEnabled(true) 会用原 port+baud 打开)
+    setPortName(probeRestorePort);
+    setModuleEnabled(true);
+    removeOSModule();
     if (data.success) {
         script.log("Probe: slave=" + data.slave + " baud=" + data.baud +
                    (data.forced ? " (forced 8N1 from " + data.protocol + ")" : ""));
-        updateValues(data.slave, data.baud, "8N1");
-        var p = findParam("slaveAddress");
-        if (p != null) p.set(data.slave);
-        setPortName(probeRestorePort);
+        // 同步 Chataigne Serial Module 参数
+        var sp = findParam("slaveAddress");
+        if (sp != null) sp.set(data.slave);
         var bp = findParam("baudRate");
         if (bp != null) bp.set(data.baud);
+        // 写 values (用实时查找,避免 init 时缓存失效)
+        var info = "Probe: slave=" + data.slave + " baud=" + data.baud + " protocol=" + data.protocol;
+        if (data.forced) info += " (forced 8N1)";
+        setCommunicationValues(data.slave, data.baud, "8N1", info);
     } else {
         script.log(data.error || "Probe failed");
     }
-    setModuleEnabled(true);
-    removeOSModule();
     showProbeResult(data);
 }
 
@@ -320,6 +338,10 @@ function continueSetSlave(frame) {
     opType = "";
     var p = findParam("slaveAddress");
     if (p != null) p.set(opSlave);
+    // 写 values
+    var baudP = findParam("baudRate");
+    var baud = (baudP != null) ? baudP.get() : 0;
+    setCommunicationValues(opSlave, baud, "8N1", "Set slave: " + opSlave);
     script.log("Slave updated to " + opSlave);
     util.showMessageBox("Slave Address Updated",
         "Slave address updated to " + opSlave + ".\n\n从站地址已更新到 " + opSlave + "。",
@@ -328,17 +350,13 @@ function continueSetSlave(frame) {
 
 function handleResetComplete() {
     opType = "";
-    setSerialBaudRateViaParam(opBaudVal);
-    updateValues(opSlave, opBaudVal, "8N1");
+    var bp = findParam("baudRate");
+    if (bp != null) bp.set(opBaudVal);
+    setCommunicationValues(opSlave, opBaudVal, "8N1", "Set baud: " + opBaudVal);
     script.log("Baud set to " + opBaudVal);
     util.showMessageBox("Baud Rate Set",
         "Baud rate set to " + opBaudVal + ".\n\n波特率已设置为 " + opBaudVal + "。",
         "info", "OK");
-}
-
-function setSerialBaudRateViaParam(baud) {
-    var p = findParam("baudRate");
-    if (p != null) p.set(baud);
 }
 
 function tryExtractModbusFrame() {

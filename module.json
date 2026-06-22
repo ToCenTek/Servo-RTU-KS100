@@ -54,7 +54,7 @@
                 "type": "String",
                 "multiline": true,
                 "readOnly": true,
-                "description": "最后一段消息\nRX log"
+                "description": "最后一组消息\nRX log"
             }
         }
     },
