@@ -378,7 +378,7 @@ function saveModuleDefaults(baud, mode) {
     var reData = new RegExp('"DataBits"\\s*:\\s*\\d+');
     var reParity = new RegExp('"Parity"\\s*:\\s*"[^"]*"');
     var reStop = new RegExp('"StopBits"\\s*:\\s*\\d+');
-    if (content.search(reBaud) < 0) {
+    if (reBaud.exec(content) == null) {
         script.logWarning("saveModuleDefaults: BaudRate field not found");
         return false;
     }
