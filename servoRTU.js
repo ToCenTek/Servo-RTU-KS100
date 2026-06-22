@@ -109,17 +109,6 @@ function crc16(bytes) {
     return [crc % 256, Math.floor(crc / 256)];
 }
 
-// 追加 CRC16 低字节在前到字节数组
-function appendCRC(bytes) {
-    var out = [];
-    var i = 0;
-    for (i = 0; i < bytes.length; i++) out.push(bytes[i]);
-    var c = crc16(out);
-    out.push(c[0]);
-    out.push(c[1]);
-    return out;
-}
-
 // 校验完整 Modbus 帧的 CRC16
 function validCRC(frame) {
     if (frame.length < 4) return false;
@@ -190,16 +179,57 @@ function makeWrite(slave, reg, value) {
 }
 
 // 追加 CRC → 发送 → 记录 TX 日志
-// 不清空 responseAccumulator,以便多命令串联(Set Communication 内部 2 帧)时
-// 所有 RX 响应按时间顺序累积到 Last Response,便于回溯完整执行过程。
-function sendFrame(bytes) {
-    var frame = appendCRC(bytes);
-    lastSentHex = bytesToHex(frame);
+// 完全照搬 modbusRTU.js (ToCenTek-modbus-RTU) 的简洁模式: 不用 appendCRC 新建数组, 直接 push 到 pdu
+function sendFrame(pdu) {
+    var c = crc16(pdu);
+    pdu.push(c[0], c[1]);
+    script.log("-TX: " + bytesToStr(pdu));
     rxBuffer = [];
     waiting = true;
     waitTime = 0;
-    local.sendBytes(frame);
-    script.log("-TX: " + lastSentHex);
+    local.sendBytes(pdu);
+}
+
+// 十六进制字符转半字节值
+function hexNibble(c) {
+    var code = c.charCodeAt(0);
+    if (code >= 48 && code <= 57) return code - 48;
+    if (code >= 65 && code <= 70) return code - 55;
+    if (code >= 97 && code <= 102) return code - 87;
+    return -1;
+}
+
+// 十六进制字符串转字节数组
+function hexToBytes(text) {
+    var clean = "";
+    var i = 0;
+    for (i = 0; i < text.length; i++) {
+        var c = text.charAt(i);
+        if (hexNibble(c) >= 0) clean = clean + c;
+    }
+    if ((clean.length % 2) != 0) return [];
+    var bytes = [];
+    for (i = 0; i < clean.length; i = i + 2) {
+        bytes.push(hexNibble(clean.charAt(i)) * 16 + hexNibble(clean.charAt(i + 1)));
+    }
+    return bytes;
+}
+
+// 字节转 2 字符十六进制字符串
+function toHexByte(v) {
+    var s = "0123456789ABCDEF";
+    return s.charAt(Math.floor(v / 16) % 16) + s.charAt(v % 16);
+}
+
+// 字节数组转空格分隔十六进制字符串
+function bytesToStr(bytes) {
+    var out = "";
+    var i = 0;
+    for (i = 0; i < bytes.length; i++) {
+        if (i > 0) out = out + " ";
+        out = out + toHexByte(bytes[i]);
+    }
+    return out;
 }
 
 // 按多个名称变体搜索模块中的可写参数
