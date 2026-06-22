@@ -630,7 +630,9 @@ function handleResetComplete() {
     confirmedSlave = opSlave;
     if (baudRateValue != null) baudRateValue.set("" + opBaudVal);
     if (protocolValue != null) protocolValue.set(modeLabel(opModeVal));
-    // 弹窗提示用户 Reload Custom Modules 让 defaults 生效
+    // 弹窗提示用户手动 Reload Custom Modules 让 defaults 生效
+    // 注意: showMessageBox 的按钮只是标签,无回调,不会触发 Reload
+    // Chataigne 引擎没有提供 reloadModules() API,必须用户在 UI 手动操作
     util.showMessageBox(
         "Servo Communication Updated",
         "Servo communication updated.\n" +
@@ -639,12 +641,15 @@ function handleResetComplete() {
         "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
         "module.json defaults have been updated.\n" +
-        "Please Reload Custom Modules to apply the new defaults.\n" +
+        "To apply the new defaults, manually Reload Custom Modules:\n" +
         "  Module menu > Reload Custom Modules\n" +
+        "(or use the keyboard shortcut shown in that menu)\n" +
         "\n" +
         "If the new params differ from current module serial, the\n" +
         "module cannot talk to the servo until you Reload.\n" +
-        "If params are unchanged, no Reload needed.\n" +
+        "If params are unchanged, no Reload is needed.\n" +
+        "\n" +
+        "---\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
@@ -652,13 +657,14 @@ function handleResetComplete() {
         "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
         "module.json 默认参数已更新。\n" +
-        "请重新加载自定义模块以应用新的默认参数。\n" +
+        "要应用新默认参数,请手动 Reload Custom Modules:\n" +
         "  模块菜单 > 重新加载自定义模块\n" +
+        "(或使用该菜单中显示的快捷键)\n" +
         "\n" +
         "如果新参数与当前模块串口不同,Reload 前模块无法与伺服通信。\n" +
         "如果参数未变,则无需 Reload。",
         "info",
-        "Reload"
+        "OK"
     );
 }
 
