@@ -433,10 +433,16 @@ function safeUpdateDefaults(baud, mode) {
         script.logWarning("safeUpdateDefaults: no fields changed (one or more not found)");
         return false;
     }
+    script.log("safeUpdateDefaults: content len=" + content.length + " newContent len=" + newContent.length);
     if (typeof JSON.parse == "function") {
         JSON.parse(newContent);
     }
     util.writeFile(modulePath, newContent, true);
+    // 验证写入
+    var verify = util.readFile(modulePath, false);
+    if (verify != null) {
+        script.log("safeUpdateDefaults: verify len=" + verify.length + " (orig " + content.length + ")");
+    }
     script.log("safeUpdateDefaults: wrote baudRate=" + baud + " dataBits=" + parts[0] + " Parity=\"" + parts[1] + "\" stopBits=" + parts[2]);
     return true;
 }
