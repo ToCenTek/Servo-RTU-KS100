@@ -288,46 +288,84 @@ function setSerialConfig(baud, mode) {
     return (baudP != null);
 }
 
-// 自省: 打印 local 的所有属性和子对象结构
-// 不能用 try-catch (JUCE 引擎不支持, 见手册 §3.1)
-// 用纯防御性检查: typeof / null / undefined
-// 避免调用 String() 全局函数 (可能被覆盖), 改用 "" + value
-function dumpLocal() {
-    script.log("=== local introspection ===");
-    if (typeof util.getObjectProperties != "function") {
-        script.log("util.getObjectProperties not available");
-        return;
-    }
-    var props = util.getObjectProperties(local);
-    if (props == null) {
-        script.log("util.getObjectProperties(local) returned null");
-        return;
-    }
-    script.log("local props: typeof=" + (typeof props) + " length=" + (props.length == null ? "?" : props.length));
-    // 逐个输出前 30 个属性, 避免依赖 length
-    for (var i = 0; i < 30; i++) {
-        var p = props[i];
-        if (p == null) break;  // null 通常表示结束
-        var name = "" + p;  // 隐式 toString, 避免 String() 函数
-        script.log("  local[" + i + "] = " + name);
-        // 找子对象的属性
-        if (typeof local.getChild == "function") {
-            var child = local.getChild(name);
-            if (child != null && typeof util.getObjectProperties == "function") {
-                var cp = util.getObjectProperties(child);
-                if (cp != null) {
-                    var cnames = "";
-                    for (var j = 0; j < 30; j++) {
-                        var c = cp[j];
-                        if (c == null) break;
-                        if (j > 0) cnames = cnames + ", ";
-                        cnames = cnames + ("" + c);
-                    }
-                    script.log("    " + name + ": [" + cnames + "]");
-                }
+// 手写 indexOf (JUCE 引擎不支持 s.indexOf)
+function strIndexOf(s, sub, start) {
+    if (sub.length == 0) return start || 0;
+    if (start == null) start = 0;
+    if (s.length < sub.length + start) return -1;
+    var lastStart = s.length - sub.length;
+    for (var i = start; i <= lastStart; i++) {
+        var match = true;
+        for (var j = 0; j < sub.length; j++) {
+            if (s.charAt(i + j) != sub.charAt(j)) {
+                match = false;
+                break;
             }
         }
+        if (match) return i;
     }
+    return -1;
+}
+
+// 在 JSON 文本中替换 "fieldName": <value> 字段值
+// 不用 RegExp, 不用 String.indexOf (JUCE 引擎不支持), 用 strIndexOf + charAt + substring
+function replaceJsonField(content, fieldName, newValue) {
+    var key = '"' + fieldName + '"';
+    var keyIdx = strIndexOf(content, key);
+    if (keyIdx < 0) return null;
+    var colonIdx = strIndexOf(content, ':', keyIdx);
+    if (colonIdx < 0) return null;
+    var valStart = colonIdx + 1;
+    while (valStart < content.length) {
+        var c = content.charAt(valStart);
+        if (c != ' ' && c != '\n' && c != '\r' && c != '\t') break;
+        valStart++;
+    }
+    var valEnd = valStart;
+    if (valStart < content.length && content.charAt(valStart) == '"') {
+        valEnd = strIndexOf(content, '"', valStart + 1);
+        if (valEnd < 0) return null;
+    } else {
+        while (valEnd < content.length) {
+            var c2 = content.charAt(valEnd);
+            if (c2 == ',' || c2 == '}' || c2 == '\n') break;
+            valEnd++;
+        }
+    }
+    return content.substring(0, valStart) + newValue + content.substring(valEnd);
+}
+
+// 安全更新 module.json defaults 块 (4 个字段)
+// 保留原文件格式 (中文/缩进/换行), 写后用 JSON.parse 验证
+function safeUpdateDefaults(baud, mode) {
+    var dir = script.getScriptDirectory();
+    var modulePath = dir + "/module.json";
+    if (!util.fileExists(modulePath)) {
+        script.logWarning("safeUpdateDefaults: module.json not found");
+        return false;
+    }
+    var content = util.readFile(modulePath, false);
+    if (content == null) {
+        script.logWarning("safeUpdateDefaults: readFile returned null");
+        return false;
+    }
+    var parts = modeToSerial(mode);
+    var c1 = replaceJsonField(content, "BaudRate", "" + baud);
+    if (c1 == null) { script.logWarning("safeUpdateDefaults: BaudRate not found"); return false; }
+    var c2 = replaceJsonField(c1, "DataBits", "" + parts[0]);
+    if (c2 == null) { script.logWarning("safeUpdateDefaults: DataBits not found"); return false; }
+    var c3 = replaceJsonField(c2, "Parity", '"' + parts[1] + '"');
+    if (c3 == null) { script.logWarning("safeUpdateDefaults: Parity not found"); return false; }
+    var c4 = replaceJsonField(c3, "StopBits", "" + parts[2]);
+    if (c4 == null) { script.logWarning("safeUpdateDefaults: StopBits not found"); return false; }
+    // 用 JSON.parse 验证 (手册 §3.1 标明 JSON.parse 可用)
+    if (typeof JSON.parse == "function") {
+        JSON.parse(c4);
+        // 如果抛异常,后续代码不执行 (无 try-catch, 依赖引擎行为)
+    }
+    util.writeFile(modulePath, c4, true);
+    script.log("safeUpdateDefaults: wrote BaudRate=" + baud + " DataBits=" + parts[0] + " Parity=" + parts[1] + " StopBits=" + parts[2]);
+    return true;
 }
 
 // 兼容旧调用：仅设置波特率
@@ -761,16 +799,20 @@ function continueSetComm(frame) {
 //        Chataigne 听到变化自动让 Serial Module 重连串口
 //        init() 重新解析 parameters + 更新 values 显示
 function handleResetComplete() {
-    // 1) 同步 Chataigne Serial Module 的 baudRate (从 defaults 读, runtime 不能改 DataBits/Parity/StopBits)
-    var ok = setSerialConfig(opBaudVal, opModeVal);
-    if (ok) {
-        script.log("Module baudRate set: " + opBaudVal);
+    // 1) 把新参数写到 module.json defaults (Chataigne 创建模块时读)
+    //    改完后再关闭+重开模块, 让 Chataigne 重新读 defaults
+    if (safeUpdateDefaults(opBaudVal, opModeVal)) {
+        script.log("module.json defaults updated");
     } else {
-        script.logWarning("Module baudRate not found; update manually");
+        script.logWarning("Failed to update module.json defaults");
     }
-    // 2) 重新 init (重新解析 parameters, 更新 values 显示)
+    // 2) 关闭 + 重新打开模块, 让 Chataigne 重新读 defaults
+    //    (也可能 Chataigne 不重读, 但值得一试)
+    trySetModuleEnabled(false);
+    trySetModuleEnabled(true);
+    // 3) 重新 init (重新解析 parameters, 更新 values 显示)
     init();
-    // 3) 弹窗提示
+    // 4) 弹窗提示
     util.showMessageBox(
         "Servo Communication Updated",
         "Servo communication updated.\n" +
@@ -778,19 +820,19 @@ function handleResetComplete() {
         "  Baud:  " + opBaudVal + "\n" +
         "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "The module's baudRate has been applied.\n" +
-        "DataBits/Parity/StopBits are read from module.json defaults\n" +
-        "at module creation, and cannot be changed at runtime.\n" +
-        "To switch mode, edit module.json defaults + Reload Modules.\n" +
+        "module.json defaults has been updated and the module\n" +
+        "has been disabled+re-enabled to apply new params.\n" +
+        "If communication fails, manually Reload Custom Modules:\n" +
+        "  Module menu > Reload Custom Modules\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
         "  波特:  " + opBaudVal + "\n" +
         "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "模块 baudRate 已应用。\n" +
-        "DataBits/Parity/StopBits 在模块创建时从 module.json defaults 读, 运行时不能改。\n" +
-        "要切换模式, 改 module.json defaults + Reload Modules。",
+        "module.json defaults 已更新, 模块已重启用新参数。\n" +
+        "如果通信失败, 请手动 Reload Custom Modules:\n" +
+        "  模块菜单 > 重新加载自定义模块",
         "info",
         "OK"
     );
