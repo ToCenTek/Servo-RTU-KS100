@@ -5,7 +5,7 @@
 
 // 状态
 var opActive = false;
-var opType = "";            // "set_baud" | "set_slave" | "force_8n1"
+var opType = "";  // "set_baud" | "set_slave"
 var opStage = 0;
 var opSlave = 1;
 var opBaudVal = 0;
@@ -13,12 +13,11 @@ var opTime = 0;
 
 var probing = false;
 var probePolls = 0;
-var PROBE_MAX_POLLS = 1200;  // 240s
+var PROBE_MAX_POLLS = 1200;
 var probeRestorePort = "";
-var probeUsedEnable = false;  // 用 setEnabled(false) 关闭的(不同于 setPortName)
 
 var closeTimer = 0;
-var CLOSE_DELAY = 0.3;      // 关闭 Chataigne 串口后等 300ms 让 Python 打开
+var CLOSE_DELAY = 0.3;
 
 var resetPending = false;
 var resetTime = 0;
@@ -32,12 +31,9 @@ var protocolValue = null;
 var slaveAddressValue = null;
 var responseAccumulator = "";
 
-// 寄存器
 var REG_FA60 = 0x003C;  // 软复位
 var REG_FA71 = 0x0047;  // 从站地址
 var REG_FA72 = 0x0048;  // 波特率
-var REG_FA73 = 0x0049;  // 协议 (3 = 8N1)
-
 var RESULT_PATH = "/tmp/probe_result.json";
 var SHELL_PATH = "/tmp/probe_ks100.sh";
 var OS_NAME = "Servo OS";
@@ -45,9 +41,8 @@ var OS_NAME = "Servo OS";
 // CRC16-Modbus (查表法, 算术实现避开位运算符)
 var crcTable = null;
 function xor16(a, b) {
-    var out = 0;
-    var bit = 1;
-    for (var i = 0; i < 16; i++) {
+    var out = 0, bit = 1, i = 0;
+    for (i = 0; i < 16; i++) {
         if ((a % 2) != (b % 2)) out += bit;
         a = Math.floor(a / 2);
         b = Math.floor(b / 2);
@@ -60,16 +55,15 @@ function initCRCTable() {
     for (var i = 0; i < 256; i++) {
         var crc = i;
         for (var j = 0; j < 8; j++) {
-            if (crc % 2 == 0) crc = Math.floor(crc / 2);
-            else crc = xor16(Math.floor(crc / 2), 0xA001);
+            crc = (crc % 2 == 0) ? Math.floor(crc / 2) : xor16(Math.floor(crc / 2), 0xA001);
         }
         crcTable.push(crc);
     }
 }
 function crc16(bytes) {
     if (crcTable == null) initCRCTable();
-    var crc = 0xFFFF;
-    for (var i = 0; i < bytes.length; i++) {
+    var crc = 0xFFFF, i = 0;
+    for (i = 0; i < bytes.length; i++) {
         var index = xor16(crc % 256, bytes[i]);
         crc = xor16(Math.floor(crc / 256), crcTable[index]);
     }
@@ -84,14 +78,13 @@ function nibble(c) {
     return -1;
 }
 function hexToBytes(text) {
-    var clean = "";
-    for (var i = 0; i < text.length; i++) {
-        var c = text.charAt(i);
-        if (nibble(c) >= 0) clean = clean + c;
+    var clean = "", i = 0, c = "", bytes = [];
+    for (i = 0; i < text.length; i++) {
+        c = text.charAt(i);
+        if (nibble(c) >= 0) clean += c;
     }
     if ((clean.length % 2) != 0) return [];
-    var bytes = [];
-    for (var i = 0; i < clean.length; i += 2) {
+    for (i = 0; i < clean.length; i += 2) {
         bytes.push(nibble(clean.charAt(i)) * 16 + nibble(clean.charAt(i + 1)));
     }
     return bytes;
@@ -101,8 +94,8 @@ function toHexByte(v) {
     return s.charAt(Math.floor(v / 16) % 16) + s.charAt(v % 16);
 }
 function bytesToStr(bytes) {
-    var out = "";
-    for (var i = 0; i < bytes.length; i++) {
+    var out = "", i = 0;
+    for (i = 0; i < bytes.length; i++) {
         if (i > 0) out += " ";
         out += toHexByte(bytes[i]);
     }
@@ -118,13 +111,20 @@ function makeRead(slave, reg, count) {
 function makeWrite(slave, reg, value) {
     return [slave, 0x06, hi(reg), lo(reg), hi(value), lo(value)];
 }
+
+// 追加一行到 responseAccumulator + 推送给 UI
+function appendLog(prefix, line) {
+    if (responseAccumulator.length > 0) responseAccumulator += "\n";
+    responseAccumulator += prefix + ": " + line;
+    if (responseValue != null) responseValue.set(responseAccumulator);
+}
+
 function sendFrame(pdu) {
     var c = crc16(pdu);
     pdu.push(c[0], c[1]);
-    script.log("-TX: " + bytesToStr(pdu));
-    if (responseAccumulator.length > 0) responseAccumulator += "\n";
-    responseAccumulator += "TX: " + bytesToStr(pdu);
-    if (responseValue != null) responseValue.set(responseAccumulator);
+    var str = bytesToStr(pdu);
+    script.log("-TX: " + str);
+    appendLog("TX", str);
     opTime = 0;
     rxBuffer = [];
     local.sendBytes(pdu);
@@ -146,26 +146,10 @@ function updateValues(slave, baud, protocol) {
     if (ci != null) ci.setCollapsed(false);
 }
 
-function setSerialBaudRate(baud) {
-    var p = findParam("baudRate");
-    if (p == null) return false;
-    p.set(baud);
-    return true;
-}
-
-function setSerialSlaveAddress(slave) {
-    var p = findParam("slaveAddress");
-    if (p == null) return false;
-    p.set(slave);
-    return true;
-}
-
 function getPortName() {
     var p = findParam("port");
-    if (p == null) return "";
-    return "" + p.get();
+    return (p == null) ? "" : ("" + p.get());
 }
-
 function setPortName(name) {
     var p = findParam("port");
     if (p == null) return false;
@@ -173,7 +157,6 @@ function setPortName(name) {
     return true;
 }
 
-// 启停本模块 (关闭/打开串口, 探测时需关闭避免与 Python pyserial 冲突)
 // Chataigne Serial Module 的 Enabled 参数在 local 顶层 (不是 local.parameters)
 function setModuleEnabled(enabled) {
     var names = ["Enabled", "enabled", "Enable", "enable", "isEnabled"];
@@ -191,7 +174,6 @@ function setModuleEnabled(enabled) {
 function ensureOSModule() {
     var osMod = root.modules.getItemWithName(OS_NAME);
     if (osMod != null) return osMod;
-    script.log(OS_NAME + " not found, auto-creating...");
     osMod = root.modules.addItem("OS");
     if (osMod == null) { script.log("Failed to create OS module"); return null; }
     osMod.setName(OS_NAME);
@@ -204,40 +186,32 @@ function removeOSModule() {
 }
 function writeShellWrapper() {
     var pyPath = script.getScriptDirectory() + "/scripts/probe_servo.py";
-    var content = "#!/bin/bash\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\npython3 \"" + pyPath + "\" \"$@\" 2>/tmp/probe_ks100.log\n";
-    util.writeFile(SHELL_PATH, content, true);
+    util.writeFile(SHELL_PATH,
+        "#!/bin/bash\nexport PATH=\"/opt/homebrew/bin:/usr/local/bin:$PATH\"\npython3 \"" + pyPath + "\" \"$@\" 2>/tmp/probe_ks100.log\n",
+        true);
 }
 
-// 命令: Get Communication - 关闭 Chataigne 端口 → Python 探测 (含 force 8N1) → 重开 Chataigne
+// 命令: Get Communication
 function getCommunication() {
     if (opActive || probing || closeTimer > 0) return;
     var port = getPortName();
     if (port.length == 0) { script.log("No port configured"); return; }
     probeRestorePort = port;
     script.log("Closing Chataigne port for Python probe...");
-    probeUsedEnable = setModuleEnabled(false);
-    if (probeUsedEnable) {
-        script.log("Module disabled via setEnabled");
-    } else {
-        script.log("setEnabled failed, falling back to setPortName");
-        setPortName("");
-    }
+    // 优先 setEnabled, 失败回退到 setPortName("")
+    var ok = setModuleEnabled(false);
+    if (!ok) setPortName("");
     closeTimer = 0.001;
 }
 
 function startPythonProbe() {
     var osMod = ensureOSModule();
-    if (osMod == null) {
-        script.log("Probe aborted: no OS module");
-        setPortName(probeRestorePort);
-        return;
-    }
+    if (osMod == null) { restoreChataigne(); return; }
     writeShellWrapper();
     util.writeFile(RESULT_PATH, '{"success":false,"status":"probing"}', true);
     if (typeof osMod.launchProcess != "function") {
         script.log("OS module has no launchProcess");
-        setPortName(probeRestorePort);
-        removeOSModule();
+        restoreChataigne();
         return;
     }
     script.log("Launching Python probe (8N2/8E1/8O1/8N1 × baud × slave)...");
@@ -246,43 +220,46 @@ function startPythonProbe() {
     probePolls = 0;
 }
 
-function onProbeResult(data) {
-    probing = false;
+// 恢复 Chataigne 串口 (无论成功失败)
+function restoreChataigne() {
+    setPortName(probeRestorePort);
+    setModuleEnabled(true);
     removeOSModule();
+}
+
+function showProbeResult(data) {
     if (data.success) {
-        var baud = data.baud;
-        var slave = data.slave;
-        var proto = data.protocol;
-        script.log("Probe: slave=" + slave + " baud=" + baud + " protocol=" + proto + (data.forced ? " (forced 8N1)" : ""));
-        updateValues(slave, baud, "8N1");
-        setSerialSlaveAddress(slave);
-        if (!probeUsedEnable) {
-            setPortName(probeRestorePort);  // 恢复 port (setPortName 路径需要)
-        }
-        setSerialBaudRate(baud);
-        setModuleEnabled(true);
-        var detail = "Slave: " + slave + "\nBaud: " + baud + "\nProtocol: " + proto + " (now 8N1)";
-        if (data.forced) {
-            detail = "Servo was " + proto + ", forced to 8N1.\n" + detail;
-        }
-        var detailCN = "从站: " + slave + "\n波特: " + baud + "\n协议: " + proto + " (已强制 8N1)";
-        if (data.forced) {
-            detailCN = "伺服原为 " + proto + ", 已强制为 8N1。\n" + detailCN;
-        }
-        util.showMessageBox("Probe Complete", detail + "\n\n" + detailCN, "info", "OK");
+        var en = ["Slave: " + data.slave, "Baud: " + data.baud,
+                  "Protocol: " + data.protocol + (data.forced ? " -> 8N1" : "")];
+        var cn = ["从站: " + data.slave, "波特: " + data.baud,
+                  "协议: " + data.protocol + (data.forced ? " -> 8N1" : "")];
+        util.showMessageBox("Probe Complete", en.join("\n") + "\n\n" + cn.join("\n"), "info", "OK");
     } else {
         var msg = data.error || "Probe failed";
-        if (data.detail) msg += ": " + data.detail;
-        script.log(msg);
-        if (!probeUsedEnable) {
-            setPortName(probeRestorePort);
-        }
-        setModuleEnabled(true);
-        util.showMessageBox("Probe Failed", msg + "\n\n" + msg, "warning", "OK");
+        util.showMessageBox("Probe Failed", msg, "warning", "OK");
     }
 }
 
-// 命令: Set BaudRate - 写 FA-72 + 软复位 (servo 已在 8N1)
+function onProbeResult(data) {
+    probing = false;
+    if (data.success) {
+        script.log("Probe: slave=" + data.slave + " baud=" + data.baud +
+                   (data.forced ? " (forced 8N1 from " + data.protocol + ")" : ""));
+        updateValues(data.slave, data.baud, "8N1");
+        var p = findParam("slaveAddress");
+        if (p != null) p.set(data.slave);
+        setPortName(probeRestorePort);
+        var bp = findParam("baudRate");
+        if (bp != null) bp.set(data.baud);
+    } else {
+        script.log(data.error || "Probe failed");
+    }
+    setModuleEnabled(true);
+    removeOSModule();
+    showProbeResult(data);
+}
+
+// 命令: Set BaudRate
 function setBaudRate(slave, baud) {
     if (opActive || probing || closeTimer > 0) return;
     var slaveNum = parseInt(slave, 10);
@@ -317,7 +294,7 @@ function continueSetBaud(frame) {
     }
 }
 
-// 命令: Set Slave Address - 写 FA-71
+// 命令: Set Slave Address
 function setSlaveAddress(newSlave) {
     if (opActive || probing || closeTimer > 0) return;
     var newNum = parseInt(newSlave, 10);
@@ -341,26 +318,27 @@ function continueSetSlave(frame) {
     }
     opActive = false;
     opType = "";
-    setSerialSlaveAddress(opSlave);
+    var p = findParam("slaveAddress");
+    if (p != null) p.set(opSlave);
     script.log("Slave updated to " + opSlave);
     util.showMessageBox("Slave Address Updated",
-        "Slave address updated to " + opSlave + ".\n\n" +
-        "从站地址已更新到 " + opSlave + "。",
+        "Slave address updated to " + opSlave + ".\n\n从站地址已更新到 " + opSlave + "。",
         "info", "OK");
 }
 
 function handleResetComplete() {
-    var type = opType;
     opType = "";
-    if (type == "set_baud") {
-        setSerialBaudRate(opBaudVal);
-        updateValues(opSlave, opBaudVal, "8N1");
-        script.log("Baud set to " + opBaudVal);
-        util.showMessageBox("Baud Rate Set",
-            "Baud rate set to " + opBaudVal + ".\n\n" +
-            "波特率已设置为 " + opBaudVal + "。",
-            "info", "OK");
-    }
+    setSerialBaudRateViaParam(opBaudVal);
+    updateValues(opSlave, opBaudVal, "8N1");
+    script.log("Baud set to " + opBaudVal);
+    util.showMessageBox("Baud Rate Set",
+        "Baud rate set to " + opBaudVal + ".\n\n波特率已设置为 " + opBaudVal + "。",
+        "info", "OK");
+}
+
+function setSerialBaudRateViaParam(baud) {
+    var p = findParam("baudRate");
+    if (p != null) p.set(baud);
 }
 
 function tryExtractModbusFrame() {
@@ -382,10 +360,9 @@ function dataReceived(data) {
     while (true) {
         var frame = tryExtractModbusFrame();
         if (frame == null) break;
-        script.log("-RX: " + bytesToStr(frame));
-        if (responseAccumulator.length > 0) responseAccumulator += "\n";
-        responseAccumulator += "RX: " + bytesToStr(frame);
-        if (responseValue != null) responseValue.set(responseAccumulator);
+        var str = bytesToStr(frame);
+        script.log("-RX: " + str);
+        appendLog("RX", str);
         if (!opActive) continue;
         if (opType == "set_baud") continueSetBaud(frame);
         else if (opType == "set_slave") continueSetSlave(frame);
@@ -413,22 +390,18 @@ function update(deltaTime) {
         probePolls++;
         if (probePolls >= PROBE_MAX_POLLS) {
             probing = false;
-            removeOSModule();
-            setPortName(probeRestorePort);
             script.log("Probe timeout. Check /tmp/probe_result.json and /tmp/probe_ks100.log");
+            restoreChataigne();
         } else if (probePolls % 10 == 0 && util.fileExists(RESULT_PATH)) {
             var data = util.readFile(RESULT_PATH, true);
-            if (data != null && data.status != "probing") {
-                onProbeResult(data);
-            }
+            if (data != null && data.status != "probing") onProbeResult(data);
         }
         return;
     }
     if (opActive) {
         opTime += deltaTime;
         if (opTime > 1.0) {
-            opActive = false;
-            opType = "";
+            opActive = false; opType = "";
             script.log("Operation timeout");
         }
     }
@@ -445,7 +418,7 @@ function init() {
         }
     }
     script.setUpdateRate(20);
-    script.log("Servo RTU KS100 loaded (8N1, Get Comm uses Python probe)");
+    script.log("Servo RTU KS100 loaded (8N1)");
 }
 
 function moduleParameterChanged(param) {
