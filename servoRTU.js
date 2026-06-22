@@ -21,6 +21,17 @@ var opSlave = 1;
 var opBaudVal = 0;
 var opModeVal = 0;
 
+// 软复位后等待驱动器重启的状态
+var resetPending = false;
+var resetWaitTime = 0;
+var RESET_WAIT_SEC = 2.5;
+
+// 最后一次成功验证(读回的伺服实际值)的通讯参数
+// 用于 init() 时还原 Communication Information 显示
+var confirmedBaud = -1;
+var confirmedMode = -1;
+var confirmedSlave = -1;
+
 var lastSentHex = "";
 var responseAccumulator = "";
 
@@ -28,6 +39,7 @@ var RESULT_PATH = "/tmp/probe_result.json";
 var SHELL_PATH = "/tmp/probe_ks100.sh";
 var OS_NAME = "Servo OS";
 
+var REG_FA60 = 0x003C;  // 软复位(写 1 触发)
 var REG_FA71 = 0x0047;
 var REG_FA72 = 0x0048;
 var REG_FA73 = 0x0049;
@@ -313,6 +325,38 @@ function updateDetectedValues(baud, slave, mode) {
     script.log("Servo found: slave " + slave + ", baud " + baud + ", mode " + modeLabel(mode));
 }
 
+// 将 module.json 的 defaults 中 DataBits/Parity/StopBits 还原为 FA-73 数值
+// (无法识别时返回 -1)
+function serialDefaultsToMode(def) {
+    if (def == null) return -1;
+    var db = def.DataBits;
+    var pa = def.Parity;
+    var sb = def.StopBits;
+    if (db == 8 && pa == "None" && sb == 2) return 0;  // 8N2
+    if (db == 8 && pa == "Even" && sb == 1) return 1;  // 8E1
+    if (db == 8 && pa == "Odd"  && sb == 1) return 2;  // 8O1
+    if (db == 8 && pa == "None" && sb == 1) return 3;  // 8N1
+    return -1;
+}
+
+// 把验证后的通讯参数写回 module.json 的 defaults,这样 Reload Custom Modules 后
+// 模块会按新参数连接,同时 init() 也能从 defaults 还原 Communication Information 显示
+function saveModuleDefaults(baud, mode) {
+    var dir = script.getScriptDirectory();
+    var modulePath = dir + "/module.json";
+    if (!util.fileExists(modulePath)) return false;
+    var json = util.readFile(modulePath, true);
+    if (json == null) return false;
+    if (json.defaults == null) json.defaults = {};
+    json.defaults.BaudRate = baud;
+    var parts = modeToSerial(mode);
+    json.defaults.DataBits = parts[0];
+    json.defaults.Parity = parts[1];
+    json.defaults.StopBits = parts[2];
+    util.writeFile(modulePath, json, true);
+    return true;
+}
+
 // 模块初始化：获取值对象引用
 function init() {
     if (local.values != null) {
@@ -323,11 +367,28 @@ function init() {
             protocolValue = ci.getChild("Protocol");
         }
     }
+    // 从 module.json 的 defaults 还原 Communication Information 显示
+    // 这样 Set Comm 验证后 Reload Modules 也能看到新值
+    var dir = script.getScriptDirectory();
+    var modulePath = dir + "/module.json";
+    if (util.fileExists(modulePath)) {
+        var json = util.readFile(modulePath, true);
+        if (json != null && json.defaults != null) {
+            var d = json.defaults;
+            if (baudRateValue != null && d.BaudRate != null) {
+                baudRateValue.set("" + d.BaudRate);
+            }
+            var m = serialDefaultsToMode(d);
+            if (protocolValue != null && m >= 0) {
+                protocolValue.set(modeLabel(m));
+            }
+        }
+    }
     script.setUpdateRate(20);
     script.log("Servo RTU KS100 loaded");
 }
 
-// 周期调用：处理超时和探测结果轮询
+// 周期调用：处理超时、软复位等待、探测结果轮询
 function update(deltaTime) {
     if (waiting) {
         waitTime = waitTime + deltaTime;
@@ -341,13 +402,16 @@ function update(deltaTime) {
                 opStage = 0;
                 if (timedOutOp == "set_comm") {
                     if (timedOutStage == 1) {
-                        script.log("Set communication failed at stage 1 (mode " + modeLabel(opModeVal) + ")");
-                        script.log("Servo did not respond. Current module serial may not match servo.");
+                        script.log("Set communication failed at stage 1 (baud " + opBaudVal + ")");
+                        script.log("Servo did not respond. Module serial may not match servo.");
                     } else if (timedOutStage == 2) {
-                        script.log("Set communication failed at stage 2 (baud " + opBaudVal + ")");
-                        script.log("Mode was updated to " + modeLabel(opModeVal) + " but baud change failed.");
-                        script.log("Servo serial is now: baud=" + opBaudVal + " mode=" + modeLabel(opModeVal));
+                        script.log("Set communication failed at stage 2 (mode " + modeLabel(opModeVal) + ")");
+                        script.log("Baud was updated to " + opBaudVal + " but mode change failed.");
+                    } else if (timedOutStage == 3) {
+                        script.log("Set communication failed at stage 3 (soft reset)");
                     }
+                } else if (timedOutOp == "verify_comm") {
+                    script.log("Verification read failed. Servo may not have applied new params.");
                 } else if (timedOutOp == "set_slave") {
                     script.log("Set slave address failed");
                 } else {
@@ -359,6 +423,14 @@ function update(deltaTime) {
                 script.log("Command timeout, no response");
                 script.log("TX: " + lastSentHex);
             }
+        }
+    }
+
+    if (resetPending) {
+        resetWaitTime = resetWaitTime + deltaTime;
+        if (resetWaitTime >= RESET_WAIT_SEC) {
+            resetPending = false;
+            handleResetComplete();
         }
     }
 
@@ -422,6 +494,8 @@ function dataReceived(data) {
                 continueSetComm(frame);
             } else if (opType == "set_slave") {
                 continueSetSlave(frame);
+            } else if (opType == "verify_comm") {
+                continueVerifyComm(frame);
             }
         }
     }
@@ -506,25 +580,130 @@ function getCommunication(slaveToProbe) {
     probeTotalPolls = 0;
 }
 
-// 多步操作：写 FA-73 协议模式、写 FA-72 波特率
+// 多步操作：写 FA-72 波特率 → 写 FA-73 协议 → 写 FA-60=1 软复位
+// 每一步都直接写保存地址(不是 +0x0080 暂存),使改动立即写入 EEPROM
+// 软复位后驱动器重启,新参数生效
 function continueSetComm(frame) {
-    if (opStage == 1 && frame[1] == 0x06) {
-        opStage = 2;
-        var baudDiv = Math.floor(opBaudVal / 100);
-        sendFrame(makeWrite(opSlave, REG_FA72, baudDiv));
-        return;
-    }
-    if (opStage == 2 && frame[1] == 0x06) {
+    if (frame[1] != 0x06) {
         opActive = false;
         opType = "";
         opStage = 0;
-        script.log("Servo communication updated to " + opBaudVal + " " + modeLabel(opModeVal));
+        script.log("Set communication failed: unexpected response 0x" + toHexByte(frame[1]));
         return;
+    }
+    if (opStage == 1) {
+        opStage = 2;
+        // Step 2: 写 FA-73 协议模式
+        sendFrame(makeWrite(opSlave, REG_FA73, opModeVal));
+        return;
+    }
+    if (opStage == 2) {
+        opStage = 3;
+        // Step 3: 写 FA-60 = 1 触发软复位,驱动器重启后用新参数
+        sendFrame(makeWrite(opSlave, REG_FA60, 1));
+        return;
+    }
+    if (opStage == 3) {
+        // 软复位命令已发出,进入等待重启阶段
+        opActive = false;
+        opType = "";
+        opStage = 0;
+        script.log("Reset command sent. Waiting " + RESET_WAIT_SEC + "s for servo reboot...");
+        resetPending = true;
+        resetWaitTime = 0;
+        return;
+    }
+}
+
+// 软复位等待结束: 切模块串口到新参数, 然后读 FA-72/FA-73 验证
+function handleResetComplete() {
+    var ok = setSerialConfig(opBaudVal, opModeVal);
+    if (ok) {
+        script.log("Module serial switched to " + opBaudVal + " " + modeLabel(opModeVal));
+    } else {
+        script.logWarning("Module serial params not found by name; update manually");
+    }
+    // 短暂延迟再发验证,等 Serial Module 内部完成重连串口
+    opActive = true;
+    opType = "verify_comm";
+    opStage = 1;
+    sendFrame(makeRead(opSlave, REG_FA72, 2));
+}
+
+// 验证读回: 期望 01 03 04 [fa72_hi fa72_lo fa73_hi fa73_lo] CRC
+function continueVerifyComm(frame) {
+    var ok = false;
+    var actualBaud = 0;
+    var actualMode = -1;
+    if (frame[1] == 0x03 && frame.length >= 9) {
+        actualBaud = (frame[3] * 256 + frame[4]) * 100;
+        actualMode = frame[5] * 256 + frame[6];
     }
     opActive = false;
     opType = "";
     opStage = 0;
-    script.log("Set communication failed at stage " + opStage);
+
+    if (actualBaud == opBaudVal && actualMode == opModeVal) {
+        // 验证通过: 持久记录 + 写 module.json + 提示
+        confirmedBaud = actualBaud;
+        confirmedMode = actualMode;
+        confirmedSlave = opSlave;
+        if (baudRateValue != null) baudRateValue.set("" + actualBaud);
+        if (protocolValue != null) protocolValue.set(modeLabel(actualMode));
+        var saved = saveModuleDefaults(actualBaud, actualMode);
+        if (saved) {
+            script.log("module.json defaults updated to " + actualBaud + " " + modeLabel(actualMode));
+        } else {
+            script.logWarning("Failed to update module.json defaults");
+        }
+        util.showMessageBox(
+            "Servo Communication Updated",
+            "Servo communication updated and verified.\n" +
+            "  Slave: " + opSlave + "\n" +
+            "  Baud:  " + actualBaud + "\n" +
+            "  Mode:  " + modeLabel(actualMode) + "\n" +
+            "\n" +
+            "module.json defaults have been updated.\n" +
+            "Please Reload Custom Modules to apply the new defaults.\n" +
+            "  Module menu > Reload Custom Modules\n" +
+            "\n" +
+            "伺服通讯已更新并验证。\n" +
+            "  从站:  " + opSlave + "\n" +
+            "  波特:  " + actualBaud + "\n" +
+            "  模式:  " + modeLabel(actualMode) + "\n" +
+            "\n" +
+            "module.json 默认参数已更新。\n" +
+            "请重新加载自定义模块以应用新的默认参数。\n" +
+            "  模块菜单 > 重新加载自定义模块",
+            "info",
+            "Reload"
+        );
+    } else {
+        var gotStr = (actualBaud > 0)
+            ? (actualBaud + " " + modeLabel(actualMode))
+            : ("no/invalid response (frame=" + bytesToHex(frame) + ")");
+        script.log("Verification mismatch: expected " + opBaudVal + " " + modeLabel(opModeVal) +
+                   ", got " + gotStr);
+        util.showMessageBox(
+            "Set Communication Mismatch",
+            "Servo did not return expected values.\n" +
+            "  Expected: " + opBaudVal + " " + modeLabel(opModeVal) + "\n" +
+            "  Actual:   " + gotStr + "\n" +
+            "\n" +
+            "The servo may not have applied the new parameters, or\n" +
+            "the module serial port may not match the servo.\n" +
+            "Try Probe Communication to recover.\n" +
+            "\n" +
+            "伺服未返回预期值。\n" +
+            "  期望: " + opBaudVal + " " + modeLabel(opModeVal) + "\n" +
+            "  实际: " + gotStr + "\n" +
+            "\n" +
+            "伺服可能未应用新参数,或模块串口与伺服不匹配。\n" +
+            "请尝试运行 Probe Communication 进行恢复。",
+            "warning",
+            "OK"
+        );
+    }
 }
 
 // 多步操作：写 FA-71 从站地址
@@ -542,9 +721,12 @@ function continueSetSlave(frame) {
     script.log("Set slave failed");
 }
 
-// 命令：修改伺服通信参数（波特率 + 协议模式）
+// 命令：修改伺服通信参数（波特率 + 协议模式 + 软复位 + 验证）
+// 流程：写 FA-72 baud → 写 FA-73 mode → 写 FA-60=1 软复位 → 等待重启 → 切模块串口 → 读回验证
+// 重要前提：调用前模块串口必须与伺服当前状态一致(否则第一步就超时)
+// 若不确定,请先运行 Probe Communication
 function setCommunication(slave, baud, mode) {
-    if (waiting || probing || opActive) return;
+    if (waiting || probing || opActive || resetPending) return;
     if (slave < 1 || slave > 254) return;
     var baudNum = parseInt(baud, 10);
     if (baudNum < 4800 || baudNum > 115200) return;
@@ -558,7 +740,9 @@ function setCommunication(slave, baud, mode) {
     opModeVal = modeNum;
 
     script.log("Setting communication: slave=" + slave + " baud=" + baudNum + " mode=" + mode);
-    sendFrame(makeWrite(slave, REG_FA73, modeNum));
+    // Step 1: 写 FA-72 baud (保存地址,直接写入 EEPROM)
+    var baudDiv = Math.floor(baudNum / 100);
+    sendFrame(makeWrite(slave, REG_FA72, baudDiv));
 }
 
 // 命令：设置从站地址
