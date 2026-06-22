@@ -236,6 +236,14 @@ function bytesToStr(bytes) {
 function findParam(names) {
     var i = 0;
     var p = null;
+    // Chataigne Serial Module 内置参数在 local.parameters 下
+    if (local.parameters != null) {
+        for (i = 0; i < names.length; i++) {
+            p = local.parameters.getChild(names[i]);
+            if (p != null) return p;
+        }
+    }
+    // 也可能在 local 下的 serial/Serial 子对象
     for (i = 0; i < names.length; i++) {
         p = local.getChild(names[i]);
         if (p != null) return p;
@@ -264,20 +272,24 @@ function modeToSerial(mode) {
 // 尝试同步 Chataigne 串口参数到探测到的伺服状态
 // 返回 true 表示至少波特率被设置
 function setSerialConfig(baud, mode) {
-    var ok = false;
+    var parts = modeToSerial(mode);
     var baudP = findParam(["baudrate", "BaudRate", "baud_rate"]);
     if (baudP != null) {
+        script.log("setSerialConfig: BaudRate set to " + baud);
         baudP.set(baud);
-        ok = true;
+    } else {
+        script.logWarning("setSerialConfig: BaudRate param not found!");
     }
-    var parts = modeToSerial(mode);
     var dataP = findParam(["databits", "DataBits", "data_bits"]);
     if (dataP != null) dataP.set(parts[0]);
+    else script.logWarning("setSerialConfig: DataBits param not found!");
     var parityP = findParam(["parity", "Parity"]);
     if (parityP != null) parityP.set(parts[1]);
+    else script.logWarning("setSerialConfig: Parity param not found!");
     var stopP = findParam(["stopbits", "StopBits", "stop_bits"]);
     if (stopP != null) stopP.set(parts[2]);
-    return ok;
+    else script.logWarning("setSerialConfig: StopBits param not found!");
+    return (baudP != null);
 }
 
 // 兼容旧调用：仅设置波特率
