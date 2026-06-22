@@ -423,6 +423,7 @@ function safeUpdateDefaults(baud, mode) {
         return false;
     }
     var parts = modeToSerial(mode);
+    script.log("safeUpdateDefaults: parts=[" + parts[0] + "," + parts[1] + "," + parts[2] + "] baud=" + baud);
     // 直接在整个 content 中找并替换 4 个字段 (Chataigne 用 camelCase)
     var newContent = simpleReplaceField(content, '"baudRate"', "" + baud);
     newContent = simpleReplaceField(newContent, '"dataBits"', "" + parts[0]);

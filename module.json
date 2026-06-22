@@ -14,7 +14,7 @@
         "baudRate": 57600,
         "dataBits": 8,
         "Parity": "None",
-        "stopBits": 2
+        "stopBits": 1
     },
     "scripts": ["servoRTU.js"],
     "parameters": {
