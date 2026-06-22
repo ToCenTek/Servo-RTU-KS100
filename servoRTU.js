@@ -287,48 +287,44 @@ function setSerialConfig(baud, mode) {
 }
 
 // 自省: 打印 local 的所有属性和子对象结构
-// 用 try-catch 包装, 即使某个属性访问失败也能继续
+// 不能用 try-catch (JUCE 引擎不支持, 见手册 §3.1)
+// 用纯防御性检查: typeof / null / undefined
+// 避免调用 String() 全局函数 (可能被覆盖), 改用 "" + value
 function dumpLocal() {
     script.log("=== local introspection ===");
     if (typeof util.getObjectProperties != "function") {
         script.log("util.getObjectProperties not available");
         return;
     }
-    try {
-        var props = util.getObjectProperties(local);
-        script.log("local props type: " + typeof props + ", length: " + (props && props.length ? props.length : "?"));
-        if (props == null) return;
-        // 直接逐个输出, 不依赖数组特性
-        for (var i = 0; i < 30; i++) {
-            try {
-                var p = props[i];
-                if (p == null && !(i in props)) break;
-                var name = String(p);
-                script.log("  local[" + i + "] = " + name);
-                // 找子对象的属性
-                try {
-                    var child = local.getChild(name);
-                    if (child != null) {
-                        var cp = util.getObjectProperties(child);
-                        // 同样逐个输出
-                        var cnames = "";
-                        for (var j = 0; j < 30; j++) {
-                            if (cp[j] == null && !(j in cp)) break;
-                            if (j > 0) cnames = cnames + ", ";
-                            cnames = cnames + String(cp[j]);
-                        }
-                        script.log("    -> [" + cnames + "]");
+    var props = util.getObjectProperties(local);
+    if (props == null) {
+        script.log("util.getObjectProperties(local) returned null");
+        return;
+    }
+    script.log("local props: typeof=" + (typeof props) + " length=" + (props.length == null ? "?" : props.length));
+    // 逐个输出前 30 个属性, 避免依赖 length
+    for (var i = 0; i < 30; i++) {
+        var p = props[i];
+        if (p == null) break;  // null 通常表示结束
+        var name = "" + p;  // 隐式 toString, 避免 String() 函数
+        script.log("  local[" + i + "] = " + name);
+        // 找子对象的属性
+        if (typeof local.getChild == "function") {
+            var child = local.getChild(name);
+            if (child != null && typeof util.getObjectProperties == "function") {
+                var cp = util.getObjectProperties(child);
+                if (cp != null) {
+                    var cnames = "";
+                    for (var j = 0; j < 30; j++) {
+                        var c = cp[j];
+                        if (c == null) break;
+                        if (j > 0) cnames = cnames + ", ";
+                        cnames = cnames + ("" + c);
                     }
-                } catch (e2) {
-                    script.log("    -> (error: " + String(e2) + ")");
+                    script.log("    " + name + ": [" + cnames + "]");
                 }
-            } catch (e1) {
-                script.log("  [" + i + "] error: " + String(e1));
-                break;
             }
         }
-    } catch (e) {
-        script.log("dumpLocal top error: " + String(e));
     }
 }
 
