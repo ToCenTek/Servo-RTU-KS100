@@ -74,20 +74,12 @@
         "Get Communication": {
             "menu": "Settings",
             "callback": "probeCommunication",
-            "description": "自动探索伺服通信参数: 遍历波特率 4800~115200, 探测 Slave Address 起的一个或多个从站\nAuto-detect servo: scan baud 4800~115200 from Slave Address (one or more)",
+            "description": "自动探索伺服通信参数: 遍历波特率 4800~115200, 探测指定 Slave Address 的从站\nAuto-detect servo: scan baud 4800~115200, probe one slave address",
             "parameters": {
                 "Slave Address": {
                     "type": "Integer",
                     "hexMode": true,
-                    "description": "起始从站地址 (Start slave, included in scan)",
-                    "default": 1,
-                    "min": 1,
-                    "max": 254
-                },
-                "Scan End": {
-                    "type": "Integer",
-                    "hexMode": true,
-                    "description": "结束从站地址。=Slave Address 表示只扫一个。Max recommended: 10。\nEnd slave. Set = Slave Address for single. Max 10 recommended.",
+                    "description": "要探测的从站地址 (1~254)\nSlave address to probe",
                     "default": 1,
                     "min": 1,
                     "max": 254
