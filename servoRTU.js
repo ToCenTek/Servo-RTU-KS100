@@ -824,8 +824,19 @@ function continueSetComm(frame) {
 // 流程: setSerialConfig() 设置 BaudRate/DataBits/Parity/StopBits
 //        Chataigne 听到变化自动让 Serial Module 重连串口
 //        init() 重新解析 parameters + 更新 values 显示
+// 删除当前模块, 让 Chataigne Reload 后重建 (用新 module.json defaults)
+function tryRemoveCurrentModule() {
+    if (root == null) return;
+    if (root.modules == null) return;
+    if (typeof root.modules.getItemWithName != "function") return;
+    if (typeof root.modules.removeItem != "function") return;
+    var mod = root.modules.getItemWithName("Servo RTU KS100");
+    if (mod == null) return;
+    root.modules.removeItem(mod);
+}
+
 function handleResetComplete() {
-    // 1) 改 parameters.baudRate (即使 defaults 改失败, baudrate 一定能改)
+    // 1) 改 parameters.baudRate (即使 defaults 改失败, baudrate 也能改)
     var ok = setSerialConfig(opBaudVal, opModeVal);
     if (ok) {
         script.log("Module baudRate set: " + opBaudVal);
@@ -838,12 +849,7 @@ function handleResetComplete() {
     } else {
         script.logWarning("Failed to update module.json defaults");
     }
-    // 3) 关闭 + 重新打开模块, 让 Chataigne 重新读 defaults
-    trySetModuleEnabled(false);
-    trySetModuleEnabled(true);
-    // 4) 重新 init (重新解析 parameters, 更新 values 显示)
-    init();
-    // 5) 弹窗提示
+    // 3) 弹窗提示 (无回调, 异步显示)
     util.showMessageBox(
         "Servo Communication Updated",
         "Servo communication updated.\n" +
@@ -851,19 +857,24 @@ function handleResetComplete() {
         "  Baud:  " + opBaudVal + "\n" +
         "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "module.json defaults updated, module restarted.\n" +
-        "If communication fails, Reload Custom Modules manually.\n" +
+        "module.json defaults updated.\n" +
+        "The current module will now be removed.\n" +
+        "Please Reload Custom Modules to re-add it with new params.\n" +
+        "  Module menu > Reload Custom Modules\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
         "  波特:  " + opBaudVal + "\n" +
         "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "module.json defaults 已更新, 模块已重启。\n" +
-        "如果通信失败, 请手动 Reload Custom Modules。",
+        "module.json defaults 已更新, 当前模块将被删除。\n" +
+        "请 Reload Custom Modules 重新加载以应用新参数。\n" +
+        "  模块菜单 > 重新加载自定义模块",
         "info",
         "OK"
     );
+    // 4) 删除当前模块 (让 Chataigne Reload 后用新 defaults 重建)
+    tryRemoveCurrentModule();
 }
 
 // 多步操作：写 FA-71 从站地址
