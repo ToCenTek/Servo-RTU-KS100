@@ -275,21 +275,40 @@ function setSerialConfig(baud, mode) {
     var parts = modeToSerial(mode);
     var baudP = findParam(["baudrate", "BaudRate", "baud_rate"]);
     if (baudP != null) {
-        script.log("setSerialConfig: BaudRate set to " + baud);
         baudP.set(baud);
-    } else {
-        script.logWarning("setSerialConfig: BaudRate param not found!");
     }
     var dataP = findParam(["databits", "DataBits", "data_bits"]);
     if (dataP != null) dataP.set(parts[0]);
-    else script.logWarning("setSerialConfig: DataBits param not found!");
     var parityP = findParam(["parity", "Parity"]);
     if (parityP != null) parityP.set(parts[1]);
-    else script.logWarning("setSerialConfig: Parity param not found!");
     var stopP = findParam(["stopbits", "StopBits", "stop_bits"]);
     if (stopP != null) stopP.set(parts[2]);
-    else script.logWarning("setSerialConfig: StopBits param not found!");
     return (baudP != null);
+}
+
+// 自省: 打印 local 的所有属性和子对象结构
+// 用于诊断 Serial Module 内置参数的实际路径
+function dumpLocal() {
+    script.log("=== local introspection ===");
+    if (typeof util.getObjectProperties == "function") {
+        var props = util.getObjectProperties(local);
+        script.log("local props: " + props);
+    } else {
+        script.log("util.getObjectProperties not available");
+    }
+    if (local.parameters != null && typeof util.getObjectProperties == "function") {
+        var pprops = util.getObjectProperties(local.parameters);
+        script.log("local.parameters props: " + pprops);
+    }
+    // 也试一下其他可能的位置
+    for (var i = 0; i < 5; i++) {
+        var guess = ["", "serial", "Serial", "connection", "Connection"][i];
+        var obj = guess == "" ? local : local.getChild(guess);
+        if (obj != null && typeof util.getObjectProperties == "function") {
+            var gp = util.getObjectProperties(obj);
+            script.log("local" + (guess == "" ? "" : "." + guess) + " props: " + gp);
+        }
+    }
 }
 
 // 兼容旧调用：仅设置波特率
@@ -730,7 +749,10 @@ function handleResetComplete() {
     } else {
         script.logWarning("Module serial params not found by name; update manually");
     }
-    // 2) 重新 init (重新解析 parameters, 更新 values 显示)
+    // 2) 自省: 打印 local / local.parameters / local.serial 的属性
+    // 用于诊断 DataBits/Parity/StopBits 的实际访问路径
+    dumpLocal();
+    // 3) 重新 init (重新解析 parameters, 更新 values 显示)
     init();
     // 3) 弹窗提示
     util.showMessageBox(
