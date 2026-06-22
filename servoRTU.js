@@ -446,7 +446,9 @@ function update(deltaTime) {
                 } else if (timedOutOp == "verify_comm") {
                     script.log("Verification read failed. Servo may not have applied new params.");
                 } else if (timedOutOp == "set_slave") {
-                    script.log("Set slave address failed");
+                    script.log("Set slave address failed: no response from slave " + opBaudVal);
+                    script.log("The servo may not be at slave " + opBaudVal + ".");
+                    script.log("If unsure, run Probe Communication to find the actual slave.");
                 } else {
                     script.log("Operation timeout");
                 }
@@ -574,7 +576,7 @@ function getCommunication(slaveToProbe) {
     probeSlave = slaveToProbe;
     probing = false;
 
-    util.showMessageBox("Please wait...", "Detecting servo communication parameters...\nRe-enable module then apply new settings.", "info", "OK");
+    util.showMessageBox("Please wait...", "探测伺服通信参数, 这需要一些时间...\n完成后将重新使能当前模块\n请将通信参数设置为伺服一致\nDetecting servo communication parameters...", "info", "OK");
 
     if (!trySetModuleEnabled(false)) {
         script.log("Cannot close port, disable module or close it manually then probe");
@@ -682,38 +684,103 @@ function handleResetComplete() {
         "module cannot talk to the servo until you Reload.\n" +
         "If params are unchanged, no Reload is needed.\n" +
         "\n" +
-        "---\n" +
+        "----------------------------------------------------------\n" +
         "\n" +
         "伺服通讯已更新。\n" +
-        "  从站:  " + opSlave + "\n" +
-        "  波特:  " + opBaudVal + "\n" +
-        "  模式:  " + modeLabel(opModeVal) + "\n" +
+        "  - 从站:  " + opSlave + "\n" +
+        "  - 波特:  " + opBaudVal + "\n" +
+        "  - 模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
         "module.json 默认参数已更新。\n" +
-        "要应用新默认参数,请手动 Reload Custom Modules:\n" +
-        "  模块菜单 > 重新加载自定义模块\n" +
-        "(或使用该菜单中显示的快捷键)\n" +
+        "要应用新默认参数, 请删除当前模块, 并重新加载自定义模块:\n" +
+        "  File > Reload Custom Modules\n" +
         "\n" +
-        "如果新参数与当前模块串口不同,Reload 前模块无法与伺服通信。\n" +
-        "如果参数未变,则无需 Reload。",
+        "如果新参数与当前模块串口不同, 重新加载前模块可能无法与伺服通信。\n" +
+        "如果参数未变, 则无需重新加载",
         "info",
         "OK"
     );
 }
 
+// 把从站地址同步到 module.json 的 parameters.Slave Address.default
+// (Reload Modules 后这个值会作为 UI 参数的初始值)
+function saveModuleSlaveAddress(newSlave) {
+    var dir = script.getScriptDirectory();
+    var modulePath = dir + "/module.json";
+    if (!util.fileExists(modulePath)) return false;
+    var content = util.readFile(modulePath, false);
+    if (content == null) return false;
+    // 匹配 "Slave Address": { ... "default": N ... } 块中的 default 值
+    // 简单做法: 在 "Slave Address" 块内替换 "default": <digits>
+    var idx = content.indexOf('"Slave Address"');
+    if (idx < 0) {
+        script.logWarning("saveModuleSlaveAddress: 'Slave Address' field not found");
+        return false;
+    }
+    // 找下一个 "Get Communication" 块作为结束边界
+    var endIdx = content.indexOf('"Get Communication"', idx);
+    if (endIdx < 0) endIdx = content.length;
+    var block = content.substring(idx, endIdx);
+    var newBlock = block.replace(
+        new RegExp('"default"\\s*:\\s*\\d+'),
+        '"default": ' + newSlave
+    );
+    content = content.substring(0, idx) + newBlock + content.substring(endIdx);
+    util.writeFile(modulePath, content, true);
+    return true;
+}
+
 // 多步操作：写 FA-71 从站地址
+// 成功后: 同步更新 module.json parameters.Slave Address.default, 更新 UI 参数
+// (Reload Modules 后会用新默认值)
 function continueSetSlave(frame) {
-    if (frame[1] == 0x06) {
+    if (frame[1] != 0x06) {
         opActive = false;
         opType = "";
         opStage = 0;
-        script.log("Slave address updated to " + opSlave);
+        script.log("Set slave failed: unexpected response 0x" + toHexByte(frame[1]));
         return;
     }
     opActive = false;
     opType = "";
     opStage = 0;
-    script.log("Set slave failed");
+    // 同步更新 UI 中的 Slave Address 参数
+    if (local.parameters != null) {
+        var slaveParam = local.parameters.getChild("Slave Address");
+        if (slaveParam != null) slaveParam.set(opSlave);
+    }
+    // 持久化到 module.json
+    if (saveModuleSlaveAddress(opSlave)) {
+        script.log("module.json Slave Address default updated to " + opSlave);
+    } else {
+        script.logWarning("Failed to update module.json Slave Address");
+    }
+    script.log("Slave address updated to " + opSlave);
+    util.showMessageBox(
+        "Slave Address Updated",
+        "Servo slave address updated.\n" +
+        "  Old: " + (opSlave > 1 ? "see Parameters" : "1") + "\n" +
+        "  New: " + opSlave + "\n" +
+        "\n" +
+        "The module's Slave Address parameter has been synced.\n" +
+        "module.json default has also been updated.\n" +
+        "\n" +
+        "All future Modbus commands will use the new slave " + opSlave + ".\n" +
+        "If you need to talk to slave 1 again, change Slave Address in the Parameters panel.\n" +
+        "\n" +
+        "---\n" +
+        "\n" +
+        "伺服从站地址已更新。\n" +
+        "  新: " + opSlave + "\n" +
+        "\n" +
+        "模块的 Slave Address 参数已同步。\n" +
+        "module.json 默认值也已更新。\n" +
+        "\n" +
+        "后续所有 Modbus 命令将使用新从站 " + opSlave + "。\n" +
+        "如需重新与从站 1 通信, 请在 Parameters 面板中修改 Slave Address。",
+        "info",
+        "OK"
+    );
 }
 
 // 命令：修改伺服通信参数（波特率 + 协议模式 + 软复位 + 验证）
@@ -741,15 +808,23 @@ function setCommunication(slave, baud, mode) {
 }
 
 // 命令：设置从站地址
+// 注意: 成功修改后,模块将使用新站号与伺服通信
+// 失败最常见原因: currentSlave 与伺服实际站号不一致(可能之前已改过但 UI 未更新)
+// 此时先用 Probe Communication 找到伺服当前站号
 function setSlaveAddress(currentSlave, newSlave) {
-    if (waiting || probing || opActive) return;
+    if (waiting || probing || opActive || resetPending) return;
     if (currentSlave < 1 || currentSlave > 254) return;
     if (newSlave < 1 || newSlave > 254) return;
+    if (currentSlave == newSlave) {
+        script.log("Set slave: new == current (" + currentSlave + "), nothing to do");
+        return;
+    }
 
     opActive = true;
     opType = "set_slave";
     opStage = 1;
     opSlave = newSlave;
+    opBaudVal = currentSlave;  // 用 opBaudVal 暂存 currentSlave 给错误诊断用
 
     script.log("Setting slave address from " + currentSlave + " to " + newSlave);
     sendFrame(makeWrite(currentSlave, REG_FA71, newSlave));
