@@ -349,21 +349,47 @@ function safeUpdateDefaults(baud, mode) {
         script.logWarning("safeUpdateDefaults: readFile returned null");
         return false;
     }
-    var parts = modeToSerial(mode);
-    var c1 = replaceJsonField(content, "BaudRate", "" + baud);
-    if (c1 == null) { script.logWarning("safeUpdateDefaults: BaudRate not found"); return false; }
-    var c2 = replaceJsonField(c1, "DataBits", "" + parts[0]);
-    if (c2 == null) { script.logWarning("safeUpdateDefaults: DataBits not found"); return false; }
-    var c3 = replaceJsonField(c2, "Parity", '"' + parts[1] + '"');
-    if (c3 == null) { script.logWarning("safeUpdateDefaults: Parity not found"); return false; }
-    var c4 = replaceJsonField(c3, "StopBits", "" + parts[2]);
-    if (c4 == null) { script.logWarning("safeUpdateDefaults: StopBits not found"); return false; }
-    // 用 JSON.parse 验证 (手册 §3.1 标明 JSON.parse 可用)
-    if (typeof JSON.parse == "function") {
-        JSON.parse(c4);
-        // 如果抛异常,后续代码不执行 (无 try-catch, 依赖引擎行为)
+    // 诊断: 检查 readFile 返回值
+    script.log("safeUpdateDefaults: type=" + (typeof content) + " hasLength=" + (content.length != null) + " len=" + (content.length == null ? "?" : content.length));
+    if (typeof content.substring == "function") {
+        var preview = content.substring(0, 60);
+        script.log("safeUpdateDefaults: preview=" + preview + "...");
+    } else {
+        script.logWarning("safeUpdateDefaults: content has no .substring() method!");
+        return false;
     }
-    util.writeFile(modulePath, c4, true);
+    // 找 defaults 块边界
+    var defKey = strIndexOf(content, '"defaults"');
+    script.log("safeUpdateDefaults: defKey=" + defKey);
+    if (defKey < 0) return false;
+    var braceStart = strIndexOf(content, '{', defKey);
+    if (braceStart < 0) return false;
+    // 找 defaults 块结束 (下一个 "scripts" 之前)
+    var blockEnd = strIndexOf(content, '"scripts"', braceStart);
+    if (blockEnd < 0) blockEnd = strIndexOf(content, '"parameters"', braceStart);
+    if (blockEnd < 0) return false;
+    var block = content.substring(braceStart, blockEnd);
+    script.log("safeUpdateDefaults: block len=" + block.length + " preview=" + block.substring(0, 30));
+    // 测试 strIndexOf 在 block 内能否找到字段
+    script.log("safeUpdateDefaults: BaudRate in block=" + (strIndexOf(block, "BaudRate") >= 0));
+    script.log("safeUpdateDefaults: DataBits in block=" + (strIndexOf(block, "DataBits") >= 0));
+    // 在 block 内替换 4 个字段
+    var parts = modeToSerial(mode);
+    var c1 = replaceJsonField(block, "BaudRate", "" + baud);
+    if (c1 == null) { script.logWarning("safeUpdateDefaults: BaudRate not found in block"); return false; }
+    var c2 = replaceJsonField(c1, "DataBits", "" + parts[0]);
+    if (c2 == null) { script.logWarning("safeUpdateDefaults: DataBits not found in block"); return false; }
+    var c3 = replaceJsonField(c2, "Parity", '"' + parts[1] + '"');
+    if (c3 == null) { script.logWarning("safeUpdateDefaults: Parity not found in block"); return false; }
+    var c4 = replaceJsonField(c3, "StopBits", "" + parts[2]);
+    if (c4 == null) { script.logWarning("safeUpdateDefaults: StopBits not found in block"); return false; }
+    // 拼回原文件: defKey 之前 + 替换后的 block + blockEnd 之后
+    var newContent = content.substring(0, braceStart) + c4 + content.substring(blockEnd);
+    // 用 JSON.parse 验证
+    if (typeof JSON.parse == "function") {
+        JSON.parse(newContent);
+    }
+    util.writeFile(modulePath, newContent, true);
     script.log("safeUpdateDefaults: wrote BaudRate=" + baud + " DataBits=" + parts[0] + " Parity=" + parts[1] + " StopBits=" + parts[2]);
     return true;
 }
@@ -799,20 +825,25 @@ function continueSetComm(frame) {
 //        Chataigne 听到变化自动让 Serial Module 重连串口
 //        init() 重新解析 parameters + 更新 values 显示
 function handleResetComplete() {
-    // 1) 把新参数写到 module.json defaults (Chataigne 创建模块时读)
-    //    改完后再关闭+重开模块, 让 Chataigne 重新读 defaults
+    // 1) 改 parameters.baudRate (即使 defaults 改失败, baudrate 一定能改)
+    var ok = setSerialConfig(opBaudVal, opModeVal);
+    if (ok) {
+        script.log("Module baudRate set: " + opBaudVal);
+    } else {
+        script.logWarning("Module baudRate not found; update manually");
+    }
+    // 2) 改 module.json defaults (DataBits/Parity/StopBits/BaudRate)
     if (safeUpdateDefaults(opBaudVal, opModeVal)) {
         script.log("module.json defaults updated");
     } else {
         script.logWarning("Failed to update module.json defaults");
     }
-    // 2) 关闭 + 重新打开模块, 让 Chataigne 重新读 defaults
-    //    (也可能 Chataigne 不重读, 但值得一试)
+    // 3) 关闭 + 重新打开模块, 让 Chataigne 重新读 defaults
     trySetModuleEnabled(false);
     trySetModuleEnabled(true);
-    // 3) 重新 init (重新解析 parameters, 更新 values 显示)
+    // 4) 重新 init (重新解析 parameters, 更新 values 显示)
     init();
-    // 4) 弹窗提示
+    // 5) 弹窗提示
     util.showMessageBox(
         "Servo Communication Updated",
         "Servo communication updated.\n" +
@@ -820,19 +851,16 @@ function handleResetComplete() {
         "  Baud:  " + opBaudVal + "\n" +
         "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "module.json defaults has been updated and the module\n" +
-        "has been disabled+re-enabled to apply new params.\n" +
-        "If communication fails, manually Reload Custom Modules:\n" +
-        "  Module menu > Reload Custom Modules\n" +
+        "module.json defaults updated, module restarted.\n" +
+        "If communication fails, Reload Custom Modules manually.\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
         "  波特:  " + opBaudVal + "\n" +
         "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "module.json defaults 已更新, 模块已重启用新参数。\n" +
-        "如果通信失败, 请手动 Reload Custom Modules:\n" +
-        "  模块菜单 > 重新加载自定义模块",
+        "module.json defaults 已更新, 模块已重启。\n" +
+        "如果通信失败, 请手动 Reload Custom Modules。",
         "info",
         "OK"
     );
