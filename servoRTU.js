@@ -777,18 +777,19 @@ function handleResetComplete() {
         "Servo communication updated.\n" +
         "  Slave: " + opSlave + "\n" +
         "  Baud:  " + opBaudVal + "\n" +
-        "  Mode:  " + modeLabel(opModeVal) + "\n" +
+        "  Mode:  " + modeLabel(opModeVal) + " (8N1 only - Chataigne hardcoded)\n" +
         "\n" +
-        "The module's serial params have been applied.\n" +
-        "If the new params differ from previous, Chataigne\n" +
-        "auto-reconnects the Serial Module.\n" +
+        "The module's baudRate has been applied.\n" +
+        "Chataigne Serial Module is hardcoded to 8N1 (DataBits/Parity/StopBits not exposed).\n" +
+        "Therefore the servo MUST be 8N1 for the module to talk to it.\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
         "  波特:  " + opBaudVal + "\n" +
-        "  模式:  " + modeLabel(opModeVal) + "\n" +
+        "  模式:  " + modeLabel(opModeVal) + " (仅 8N1, Chataigne 硬编码)\n" +
         "\n" +
-        "模块串口参数已应用, 如有变化 Chataigne 自动重连。",
+        "模块 baudRate 已应用。\n" +
+        "Chataigne Serial Module 硬编码 8N1 (DataBits/Parity/StopBits 不暴露), 所以伺服必须设为 8N1。",
         "info",
         "OK"
     );
@@ -845,12 +846,19 @@ function continueSetSlave(frame) {
 // 流程：写 FA-72 baud → 写 FA-73 mode → 写 FA-60=1 软复位 → 等待重启 → 切模块串口 → 读回验证
 // 重要前提：调用前模块串口必须与伺服当前状态一致(否则第一步就超时)
 // 若不确定,请先运行 Probe Communication
+// 注意: Chataigne Serial Module 硬编码 8N1 (DataBits/Parity/StopBits 不可改).
+//       如果用户传 8N2/8E1/8O1, 实际只会写 8N1 到伺服.
 function setCommunication(slave, baud, mode) {
     if (waiting || probing || opActive || resetPending) return;
     if (slave < 1 || slave > 254) return;
     var baudNum = parseInt(baud, 10);
     if (baudNum < 4800 || baudNum > 115200) return;
     var modeNum = modeValue(mode);
+    // 强制 8N1: Chataigne Serial Module 硬编码, 其他模式不可用
+    if (modeNum != 3) {
+        script.logWarning("Chataigne Serial Module is hardcoded to 8N1. Forcing 8N1.");
+        modeNum = 3;
+    }
 
     opActive = true;
     opType = "set_comm";
