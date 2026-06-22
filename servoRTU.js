@@ -286,35 +286,49 @@ function setSerialConfig(baud, mode) {
     return (baudP != null);
 }
 
-// 把 JS 数组转字符串 (util.getObjectProperties 返回数组但 toString 是 [Array])
-function joinArray(arr, sep) {
-    if (sep == null) sep = ", ";
-    var s = "";
-    for (var i = 0; i < arr.length; i++) {
-        if (i > 0) s = s + sep;
-        s = s + String(arr[i]);
-    }
-    return s;
-}
-
 // 自省: 打印 local 的所有属性和子对象结构
-// 用于诊断 Serial Module 内置参数的实际路径
+// 用 try-catch 包装, 即使某个属性访问失败也能继续
 function dumpLocal() {
     script.log("=== local introspection ===");
     if (typeof util.getObjectProperties != "function") {
         script.log("util.getObjectProperties not available");
         return;
     }
-    var props = util.getObjectProperties(local);
-    script.log("local: [" + joinArray(props) + "]");
-    // 遍历每个直接子对象, 看它自己有什么属性
-    for (var i = 0; i < props.length; i++) {
-        var name = String(props[i]);
-        var child = local.getChild(name);
-        if (child != null) {
-            var cp = util.getObjectProperties(child);
-            script.log("  local." + name + ": [" + joinArray(cp) + "]");
+    try {
+        var props = util.getObjectProperties(local);
+        script.log("local props type: " + typeof props + ", length: " + (props && props.length ? props.length : "?"));
+        if (props == null) return;
+        // 直接逐个输出, 不依赖数组特性
+        for (var i = 0; i < 30; i++) {
+            try {
+                var p = props[i];
+                if (p == null && !(i in props)) break;
+                var name = String(p);
+                script.log("  local[" + i + "] = " + name);
+                // 找子对象的属性
+                try {
+                    var child = local.getChild(name);
+                    if (child != null) {
+                        var cp = util.getObjectProperties(child);
+                        // 同样逐个输出
+                        var cnames = "";
+                        for (var j = 0; j < 30; j++) {
+                            if (cp[j] == null && !(j in cp)) break;
+                            if (j > 0) cnames = cnames + ", ";
+                            cnames = cnames + String(cp[j]);
+                        }
+                        script.log("    -> [" + cnames + "]");
+                    }
+                } catch (e2) {
+                    script.log("    -> (error: " + String(e2) + ")");
+                }
+            } catch (e1) {
+                script.log("  [" + i + "] error: " + String(e1));
+                break;
+            }
         }
+    } catch (e) {
+        script.log("dumpLocal top error: " + String(e));
     }
 }
 
