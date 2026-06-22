@@ -28,7 +28,7 @@
         },
         "Get Communication": {
             "type": "Trigger",
-            "description": "自动探测伺服通信参数: 默认扫 slave 1~10, 总线上需只有一个设备\nProbe servo: scan slave 1~10 (no Slave Address param needed), bus must have exactly one device"
+            "description": "自动探测伺服通信参数: 固定从站 1, 扫描所有波特率/协议组合\nProbe servo: fixed slave=1, scan all baud/mode combos"
         }
     },
     "values": {
@@ -74,16 +74,8 @@
         "Get Communication": {
             "menu": "Settings",
             "callback": "probeCommunication",
-            "description": "自动探索伺服通信参数: 扫描波特率 × 协议 × 从站, 找到就停\nAuto-detect servo: scan baud/protocol/slave, stop on first hit",
+            "description": "自动探索伺服通信参数: 固定从站 1, 扫描所有波特率/协议组合\nAuto-detect servo: fixed slave=1, scan all baud/mode combos",
             "parameters": {
-                "Scan End": {
-                    "type": "Integer",
-                    "hexMode": true,
-                    "description": "扫描结束从站地址 (含). 默认 10. 如果探测失败, 加大此值重试.\nEnd slave (default 10). Increase if not found.",
-                    "default": 10,
-                    "min": 1,
-                    "max": 254
-                }
             }
         },
         "Set Communication": {

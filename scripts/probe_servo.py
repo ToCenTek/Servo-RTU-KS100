@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""KS100 Modbus RTU 通信参数自动探测."""
+"""KS100 Modbus RTU 通信参数自动探测 (固定从站 1)."""
 import sys
 import json
 import struct
@@ -24,7 +24,7 @@ MODES = {
     "8N1": (8, 'N', 1), "8N2": (8, 'N', 2),
     "8E1": (8, 'E', 1), "8O1": (8, 'O', 1),
 }
-TIMEOUT = 0.04  # 40ms 单次超时, 总线通常响应快
+TIMEOUT = 0.04
 
 
 def crc16(data):
@@ -40,16 +40,10 @@ def crc16(data):
     return struct.pack('<H', crc)
 
 
-def make_read(slave, reg16, count=3):
-    """Modbus 0x03 读多字命令 + CRC. count=3 即读 0x0047~0x0049 (FA-71/72/73)."""
-    return struct.pack('>BBHH', slave, 0x03, reg16, count) + crc16(struct.pack('>BBHH', slave, 0x03, reg16, count))
-
-
-def try_mode(port, baud, mode_key, slave):
-    """在指定组合下尝试读 0x0047~0x0049.
-    返回 None (无响应/异常) 或 dict (成功, 含 fa72, fa73, slave 等).
-    注意: 'slave' 字段是发送时用的地址. 真实站号从响应帧的 FA-71 读出
-    (resp[3]*256+resp[4]), 但通常发送地址 == 实际地址.
+def try_mode(port, baud, mode_key, slave=1):
+    """在指定 (port, baud, mode) 组合下尝试用 Modbus 0x03 读 0x0047~0x0049.
+    固定从站 1. 实际站号从响应帧 FA-71 读出 (resp[3..4]).
+    返回 None (无响应/异常) 或 dict (成功).
     """
     db, par, sb = MODES[mode_key]
     try:
@@ -60,7 +54,7 @@ def try_mode(port, baud, mode_key, slave):
         resp = ser.read(256)
         ser.close()
         # 响应帧: ADR(1) FUNC(1) BC(1) DATA(2N) CRC(2) = 5+2N
-        # 读 3 字, BC=6, 总长 11 字节. 至少 11 字节且 FUNC=0x03 才算成功
+        # 读 3 字, BC=6, 总长 11. 至少 11 字节且 FUNC=0x03 才算成功
         if len(resp) >= 11 and resp[1] == 0x03:
             fa72 = resp[5] * 256 + resp[6]
             fa73 = resp[7] * 256 + resp[8]
@@ -75,21 +69,13 @@ def try_mode(port, baud, mode_key, slave):
 
 
 def main():
-    slave_start = 1
-    slave_end = 10        # 默认扫 1~10, 覆盖常见场景, 找到就停
     port = None
     output = "/tmp/probe_result.json"
 
     i = 0
     while i < len(sys.argv):
         a = sys.argv[i]
-        if a == '--slave' and i + 1 < len(sys.argv):
-            slave_start = int(sys.argv[i + 1])
-            i += 2
-        elif a == '--scan-end' and i + 1 < len(sys.argv):
-            slave_end = int(sys.argv[i + 1])
-            i += 2
-        elif a == '--port' and i + 1 < len(sys.argv):
+        if a == '--port' and i + 1 < len(sys.argv):
             port = sys.argv[i + 1]; i += 2
         elif a == '--output' and i + 1 < len(sys.argv):
             output = sys.argv[i + 1]; i += 2
@@ -106,22 +92,19 @@ def main():
             json.dump({"success": False, "error": "未检测到串口设备"}, f)
         sys.exit(1)
 
-    # 扫描: 站号 (1~254) × 波特率 (6) × 协议 (4). 总线只 1 个设备,
-    # 找到第一个有效响应就退出. 实际站号从响应帧的 FA-71 读出 (resp[3..4]).
-    for slave in range(slave_start, slave_end + 1):
-        for baud in BAUD_RATES:
-            for mode_key in ["8N1", "8N2", "8E1", "8O1"]:
-                for p in ports:
-                    r = try_mode(p, baud, mode_key, slave)
-                    if r:
-                        r["scan_range"] = [slave_start, slave_end]
-                        with open(output, 'w') as f:
-                            json.dump(r, f)
-                        print(json.dumps(r))
-                        sys.exit(0)
+    # 固定从站 1, 扫描 6 波特率 × 4 协议. 总线只 1 个设备.
+    for baud in BAUD_RATES:
+        for mode_key in ["8N1", "8N2", "8E1", "8O1"]:
+            for p in ports:
+                r = try_mode(p, baud, mode_key)
+                if r:
+                    with open(output, 'w') as f:
+                        json.dump(r, f)
+                    print(json.dumps(r))
+                    sys.exit(0)
 
     with open(output, 'w') as f:
-        json.dump({"success": False, "error": "未找到伺服 (扫 slave 1~{})".format(slave_end)}, f)
+        json.dump({"success": False, "error": "未找到伺服 (slave 1)"}, f)
     sys.exit(1)
 
 
