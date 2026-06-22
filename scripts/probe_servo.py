@@ -24,7 +24,7 @@ MODES = {
     "8N1": (8, 'N', 1), "8N2": (8, 'N', 2),
     "8E1": (8, 'E', 1), "8O1": (8, 'O', 1),
 }
-TIMEOUT = 0.08
+TIMEOUT = 0.04  # 40ms 单次超时, 总线通常响应快
 
 
 def crc16(data):
@@ -76,7 +76,7 @@ def try_mode(port, baud, mode_key, slave):
 
 def main():
     slave_start = 1
-    slave_end = 254       # 默认扫 Modbus 完整地址范围 1~254, 找到就停
+    slave_end = 10        # 默认扫 1~10, 覆盖常见场景, 找到就停
     port = None
     output = "/tmp/probe_result.json"
 

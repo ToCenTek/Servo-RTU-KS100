@@ -79,8 +79,8 @@
                 "Scan End": {
                     "type": "Integer",
                     "hexMode": true,
-                    "description": "扫描结束从站地址 (含). 默认 254 (Modbus 最大地址). 找到响应就停, 实际不会扫满.\nEnd slave (default 254). Stops on first hit, so usually fast.",
-                    "default": 254,
+                    "description": "扫描结束从站地址 (含). 默认 10. 如果探测失败, 加大此值重试.\nEnd slave (default 10). Increase if not found.",
+                    "default": 10,
                     "min": 1,
                     "max": 254
                 }

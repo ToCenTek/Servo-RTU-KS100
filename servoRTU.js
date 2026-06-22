@@ -9,10 +9,10 @@ var rxBuffer = [];
 
 var probing = false;
 var probeSlave = 1;
-var probeSlaveEnd = 254;  // 默认扫 Modbus 完整地址 1~254, 找到就停
+var probeSlaveEnd = 10;   // 默认扫 1~10, 覆盖常见场景, 找到就停
 var probePollCount = 0;
 var probeTotalPolls = 0;
-var probeMaxPolls = 600;  // 默认扫描范围更大, 给足时间
+var probeMaxPolls = 120;  // 约 24 秒 (200ms × 120)
 var probeRestoreBaud = 0;
 var probeRestoreMode = -1;
 
@@ -586,14 +586,14 @@ function tryExtractFrame() {
 // 实际从站地址从 FA-71 寄存器读出, 不依赖 UI 参数
 function getCommunication(slaveEnd) {
     if (waiting || probing) return;
-    if (slaveEnd == null || slaveEnd < 1) slaveEnd = 254;
+    if (slaveEnd == null || slaveEnd < 1) slaveEnd = 10;
     if (slaveEnd > 254) slaveEnd = 254;
     probeSlave = 1;
     probeSlaveEnd = slaveEnd;
     probing = false;
 
     util.showMessageBox("Please wait...",
-        "探测伺服通信参数 (扫描 slave 1~" + slaveEnd + ")...\n" +
+        "探测伺服通信参数...\n" +
         "请确保总线上只有 1 个从站\n" +
         "\n" +
         "Detecting servo: scan slave 1~" + slaveEnd + "...",
@@ -835,7 +835,7 @@ function setCommunication(slave, baud, mode) {
 // 命令: Get Communication
 // 接受 Scan End 一个参数, 不依赖 parameters.Slave Address
 function probeCommunication(scanEnd) {
-    if (scanEnd == null) scanEnd = 254;
+    if (scanEnd == null) scanEnd = 10;
     getCommunication(scanEnd);
 }
 
@@ -864,9 +864,9 @@ function setSlaveAddress(currentSlave, newSlave) {
 
 // Parameters 面板参数变化回调
 function moduleParameterChanged(param) {
-    // Get Communication Trigger: 默认扫 1~254, 不依赖 parameters.Slave Address
+    // Get Communication Trigger: 默认扫 1~10, 不依赖 parameters.Slave Address
     if (param.niceName == "Get Communication") {
-        getCommunication(254);
+        getCommunication(10);
     }
 }
 
