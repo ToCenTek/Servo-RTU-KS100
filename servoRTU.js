@@ -269,20 +269,22 @@ function modeToSerial(mode) {
     return [8, "None", 1];
 }
 
-// 尝试同步 Chataigne 串口参数到探测到的伺服状态
+// 尝试同步 Chataigne 串口参数
+// Chataigne Serial Module 暴露的 parameters (从 dumpLocal 看到):
+//   baudRate, slaveAddress, port, protocol, autoAdd, messageStructure,
+//   customSeparator, firstValueIsTheName, pass_through, dtr, rts, isConnected
+//   (没有 DataBits/Parity/StopBits -- Chataigne 不暴露, 可能 C++ 层硬编码)
+// 所以只能设 baudRate. dataBits/parity/stopBits 假设模块已配好
 // 返回 true 表示至少波特率被设置
 function setSerialConfig(baud, mode) {
     var parts = modeToSerial(mode);
-    var baudP = findParam(["baudrate", "BaudRate", "baud_rate"]);
+    // BaudRate -- Chataigne 参数实际叫 baudRate, 但 getChild 大小写不敏感
+    var baudP = findParam(["baudRate", "BaudRate", "baudrate", "baud_rate"]);
     if (baudP != null) {
         baudP.set(baud);
     }
-    var dataP = findParam(["databits", "DataBits", "data_bits"]);
-    if (dataP != null) dataP.set(parts[0]);
-    var parityP = findParam(["parity", "Parity"]);
-    if (parityP != null) parityP.set(parts[1]);
-    var stopP = findParam(["stopbits", "StopBits", "stop_bits"]);
-    if (stopP != null) stopP.set(parts[2]);
+    // DataBits/Parity/StopBits 不可改 (Chataigne 不暴露这些参数)
+    // 假设: 用户使用时这些参数已通过 GUI / defaults 块配置好
     return (baudP != null);
 }
 
@@ -759,17 +761,15 @@ function continueSetComm(frame) {
 //        Chataigne 听到变化自动让 Serial Module 重连串口
 //        init() 重新解析 parameters + 更新 values 显示
 function handleResetComplete() {
-    // 1) 同步 Serial Module 内置参数
+    // 1) 同步 Chataigne Serial Module 的 baudRate
+    //    (dataBits/parity/stopBits Chataigne 不暴露, 不能改, 假设模块已配好)
     var ok = setSerialConfig(opBaudVal, opModeVal);
     if (ok) {
-        script.log("Module serial params set: " + opBaudVal + " " + modeLabel(opModeVal));
+        script.log("Module baudRate set: " + opBaudVal);
     } else {
-        script.logWarning("Module serial params not found by name; update manually");
+        script.logWarning("Module baudRate not found; update manually");
     }
-    // 2) 自省: 打印 local / local.parameters / local.serial 的属性
-    // 用于诊断 DataBits/Parity/StopBits 的实际访问路径
-    dumpLocal();
-    // 3) 重新 init (重新解析 parameters, 更新 values 显示)
+    // 2) 重新 init (重新解析 parameters, 更新 values 显示)
     init();
     // 3) 弹窗提示
     util.showMessageBox(
@@ -807,9 +807,9 @@ function continueSetSlave(frame) {
     opActive = false;
     opType = "";
     opStage = 0;
-    // 同步更新 UI 中的 Slave Address 参数
+    // 同步更新 Chataigne Serial Module 内置 slaveAddress 参数 (实际叫小写, 无空格)
     if (local.parameters != null) {
-        var slaveParam = local.parameters.getChild("Slave Address");
+        var slaveParam = local.parameters.getChild("slaveAddress");
         if (slaveParam != null) slaveParam.set(opSlave);
     }
     // 不再修改 module.json, 只更新 UI 参数 (已有, 见 760 行)
