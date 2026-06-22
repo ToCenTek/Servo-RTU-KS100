@@ -761,8 +761,7 @@ function continueSetComm(frame) {
 //        Chataigne 听到变化自动让 Serial Module 重连串口
 //        init() 重新解析 parameters + 更新 values 显示
 function handleResetComplete() {
-    // 1) 同步 Chataigne Serial Module 的 baudRate
-    //    (dataBits/parity/stopBits Chataigne 不暴露, 不能改, 假设模块已配好)
+    // 1) 同步 Chataigne Serial Module 的 baudRate (从 defaults 读, runtime 不能改 DataBits/Parity/StopBits)
     var ok = setSerialConfig(opBaudVal, opModeVal);
     if (ok) {
         script.log("Module baudRate set: " + opBaudVal);
@@ -777,19 +776,21 @@ function handleResetComplete() {
         "Servo communication updated.\n" +
         "  Slave: " + opSlave + "\n" +
         "  Baud:  " + opBaudVal + "\n" +
-        "  Mode:  " + modeLabel(opModeVal) + " (8N1 only - Chataigne hardcoded)\n" +
+        "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
         "The module's baudRate has been applied.\n" +
-        "Chataigne Serial Module is hardcoded to 8N1 (DataBits/Parity/StopBits not exposed).\n" +
-        "Therefore the servo MUST be 8N1 for the module to talk to it.\n" +
+        "DataBits/Parity/StopBits are read from module.json defaults\n" +
+        "at module creation, and cannot be changed at runtime.\n" +
+        "To switch mode, edit module.json defaults + Reload Modules.\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
         "  波特:  " + opBaudVal + "\n" +
-        "  模式:  " + modeLabel(opModeVal) + " (仅 8N1, Chataigne 硬编码)\n" +
+        "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
         "模块 baudRate 已应用。\n" +
-        "Chataigne Serial Module 硬编码 8N1 (DataBits/Parity/StopBits 不暴露), 所以伺服必须设为 8N1。",
+        "DataBits/Parity/StopBits 在模块创建时从 module.json defaults 读, 运行时不能改。\n" +
+        "要切换模式, 改 module.json defaults + Reload Modules。",
         "info",
         "OK"
     );
@@ -846,19 +847,14 @@ function continueSetSlave(frame) {
 // 流程：写 FA-72 baud → 写 FA-73 mode → 写 FA-60=1 软复位 → 等待重启 → 切模块串口 → 读回验证
 // 重要前提：调用前模块串口必须与伺服当前状态一致(否则第一步就超时)
 // 若不确定,请先运行 Probe Communication
-// 注意: Chataigne Serial Module 硬编码 8N1 (DataBits/Parity/StopBits 不可改).
-//       如果用户传 8N2/8E1/8O1, 实际只会写 8N1 到伺服.
+// 注意: Chataigne Serial Module 在模块创建时读 module.json defaults 块(DataBits/Parity/StopBits),
+//       运行时不能改. 要切换模式, 需改 module.json defaults + Reload Modules.
 function setCommunication(slave, baud, mode) {
     if (waiting || probing || opActive || resetPending) return;
     if (slave < 1 || slave > 254) return;
     var baudNum = parseInt(baud, 10);
     if (baudNum < 4800 || baudNum > 115200) return;
     var modeNum = modeValue(mode);
-    // 强制 8N1: Chataigne Serial Module 硬编码, 其他模式不可用
-    if (modeNum != 3) {
-        script.logWarning("Chataigne Serial Module is hardcoded to 8N1. Forcing 8N1.");
-        modeNum = 3;
-    }
 
     opActive = true;
     opType = "set_comm";
