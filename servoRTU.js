@@ -356,9 +356,10 @@ function simpleReplaceField(content, key, newValue) {
     return content.substring(0, valStart) + newValue + content.substring(valEnd);
 }
 
-// 更新 module.json defaults 块 (4 个字段)
-// 保留原文件格式. 如果 verify 失败, 报警 (file 已被截断)
-// 返回: true (成功) / false (失败)
+// 生成 module.json 的新 defaults 块内容
+// 不写 module.json (JUCE 引擎 util.writeFile 不可靠, 会截断内容).
+// 改为: 把新内容写到 /tmp, 让用户用 diff 手动应用.
+// 返回: true (有变化) / false (无变化 或 失败)
 function safeUpdateDefaults(baud, mode) {
     var dir = script.getScriptDirectory();
     var modulePath = dir + "/module.json";
@@ -371,14 +372,11 @@ function safeUpdateDefaults(baud, mode) {
     newContent = simpleReplaceField(newContent, '"Parity"', '"' + parts[1] + '"');
     newContent = simpleReplaceField(newContent, '"stopBits"', "" + parts[2]);
     if (newContent == content) return false;
-    util.writeFile(modulePath, newContent, true);
-    // 验证: 读回看是否完整
-    var verify = util.readFile(modulePath, false);
-    if (verify == null || verify.length < newContent.length - 100) {
-        script.logWarning("safeUpdateDefaults: write truncated! " +
-            "content=" + newContent.length + " verify=" + (verify == null ? "null" : verify.length));
-        return false;
-    }
+    // 不写原 file. 写到 /tmp 让用户 diff/手动改.
+    util.writeFile("/tmp/module.json.bak", content, true);
+    util.writeFile("/tmp/module.json.new", newContent, true);
+    script.log("module.json new content written to /tmp/module.json.new");
+    script.log("Compare with: diff /tmp/module.json.bak /tmp/module.json.new");
     return true;
 }
 
@@ -807,18 +805,18 @@ function continueSetComm(frame) {
     }
 }
 
-// 软复位等待结束: 同步 Chataigne Serial Module, 写 module.json defaults, 提示 Reload
-// 流程: safeUpdateDefaults() 写 file (有截断风险, 已加验证)
+// 软复位等待结束: 同步 Chataigne Serial Module, 生成 module.json 新内容, 提示手动应用
+// 流程: safeUpdateDefaults() 生成新内容写到 /tmp (不写原 file, 因 util.writeFile 会截断)
 //        setSerialConfig() 设 local.parameters.baudRate (实时)
-//        用户必须 Reload Custom Modules 让 Chataigne 重新读 defaults
-//        (试过 trySetModuleEnabled toggle, 但 Chataigne 不重读, 必须 Reload)
+//        用户必须: diff 看改动 → 手动编辑 module.json → 删模块 → Reload Custom Modules
+//        (启停模块不重读 defaults, 只有 Reload 才读)
 function handleResetComplete() {
-    // 1) 尝试写 module.json defaults (4 字段)
-    var wroteDefaults = safeUpdateDefaults(opBaudVal, opModeVal);
-    if (wroteDefaults) {
-        script.log("module.json defaults updated");
+    // 1) 生成新 module.json 内容 (写到 /tmp, 不动原 file)
+    var hasNewContent = safeUpdateDefaults(opBaudVal, opModeVal);
+    if (hasNewContent) {
+        script.log("New module.json content written to /tmp/module.json.new");
     } else {
-        script.logWarning("Failed to write module.json defaults (file may be truncated)");
+        script.log("No module.json changes needed");
     }
     // 2) 设 local.parameters.baudRate (Chataigne 实时改, 不需 Reload)
     var ok = setSerialConfig(opBaudVal, opModeVal);
@@ -829,7 +827,7 @@ function handleResetComplete() {
     }
     // 3) 重新 init
     init();
-    // 4) 弹窗 (总是提示 Reload, 因为 mode 改了需要 Chataigne 重新读 defaults)
+    // 4) 弹窗 (总是提示手动操作, 因为 mode 改了需要 Chataigne 重新读 defaults)
     var title = "Servo Communication Updated";
     var body =
         "Servo communication updated.\n" +
@@ -837,27 +835,27 @@ function handleResetComplete() {
         "  Baud:  " + opBaudVal + "\n" +
         "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        (wroteDefaults ? "module.json defaults updated.\n" : "WARNING: module.json write may have failed.\n") +
+        (hasNewContent ? "New module.json content saved to /tmp/module.json.new\n" : "module.json already has these defaults.\n") +
         "\n" +
-        "NEXT STEPS (Chataigne reads defaults only at module creation,\n" +
+        "MANUAL STEPS (Chataigne reads defaults only at module creation,\n" +
         "and enable/disable toggle does NOT re-read them):\n" +
-        "  1. Verify module.json: cat module.json | head -20\n" +
-        (wroteDefaults ? "" : "     (if truncated, restore: git checkout HEAD -- module.json)\n") +
-        "  2. Module menu > Reload Custom Modules\n" +
-        "  3. Module will re-create with new defaults\n" +
+        "  1. Review changes: diff /tmp/module.json.bak /tmp/module.json.new\n" +
+        "  2. Apply to module.json manually (e.g. text editor or cp)\n" +
+        "  3. Right-click this module in Module Manager > Delete/Remove\n" +
+        "  4. Module menu > Reload Custom Modules\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
         "  波特:  " + opBaudVal + "\n" +
         "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        (wroteDefaults ? "module.json defaults 已更新。\n" : "警告: module.json 写入可能失败。\n") +
+        (hasNewContent ? "新 module.json 内容已存到 /tmp/module.json.new\n" : "module.json 已是这些 defaults。\n") +
         "\n" +
-        "下一步 (Chataigne 只在模块创建时读 defaults, 启停模块不重读):\n" +
-        "  1. 验证 module.json: cat module.json | head -20\n" +
-        (wroteDefaults ? "" : "     (如果截断, 恢复: git checkout HEAD -- module.json)\n") +
-        "  2. 模块菜单 > 重新加载自定义模块\n" +
-        "  3. 模块会用新 defaults 重建";
+        "手动步骤 (Chataigne 只在模块创建时读 defaults, 启停模块不重读):\n" +
+        "  1. 查看改动: diff /tmp/module.json.bak /tmp/module.json.new\n" +
+        "  2. 手动应用到 module.json (文本编辑器 或 cp)\n" +
+        "  3. 在 Module Manager 中右键此模块 > 删除/移除\n" +
+        "  4. 模块菜单 > 重新加载自定义模块";
     util.showMessageBox(title, body, "info", "OK");
 }
 
