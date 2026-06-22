@@ -210,7 +210,34 @@ function findParam(names) {
     return null;
 }
 
-// 尝试设置串口波特率（可能不支持）
+// 将 FA-73 协议值映射为 (dataBits, parity, stopBits) 三元组
+function modeToSerial(mode) {
+    if (mode == 0) return [8, "None", 2];
+    if (mode == 1) return [8, "Even", 1];
+    if (mode == 2) return [8, "Odd", 1];
+    return [8, "None", 1];
+}
+
+// 尝试同步 Chataigne 串口参数到探测到的伺服状态
+// 返回 true 表示至少波特率被设置
+function setSerialConfig(baud, mode) {
+    var ok = false;
+    var baudP = findParam(["baudrate", "BaudRate", "baud_rate"]);
+    if (baudP != null) {
+        baudP.set(baud);
+        ok = true;
+    }
+    var parts = modeToSerial(mode);
+    var dataP = findParam(["databits", "DataBits", "data_bits"]);
+    if (dataP != null) dataP.set(parts[0]);
+    var parityP = findParam(["parity", "Parity"]);
+    if (parityP != null) parityP.set(parts[1]);
+    var stopP = findParam(["stopbits", "StopBits", "stop_bits"]);
+    if (stopP != null) stopP.set(parts[2]);
+    return ok;
+}
+
+// 兼容旧调用：仅设置波特率
 function setSerialBaudRate(baud) {
     var p = findParam(["baudrate", "BaudRate", "baud_rate"]);
     if (p == null) return false;
@@ -305,12 +332,29 @@ function update(deltaTime) {
     if (waiting) {
         waitTime = waitTime + deltaTime;
         if (waitTime > 0.5) {
+            var timedOutOp = opType;
+            var timedOutStage = opStage;
             waiting = false;
             if (opActive) {
                 opActive = false;
                 opType = "";
-                script.log("Operation timeout");
+                opStage = 0;
+                if (timedOutOp == "set_comm") {
+                    if (timedOutStage == 1) {
+                        script.log("Set communication failed at stage 1 (mode " + modeLabel(opModeVal) + ")");
+                        script.log("Servo did not respond. Current module serial may not match servo.");
+                    } else if (timedOutStage == 2) {
+                        script.log("Set communication failed at stage 2 (baud " + opBaudVal + ")");
+                        script.log("Mode was updated to " + modeLabel(opModeVal) + " but baud change failed.");
+                        script.log("Servo serial is now: baud=" + opBaudVal + " mode=" + modeLabel(opModeVal));
+                    }
+                } else if (timedOutOp == "set_slave") {
+                    script.log("Set slave address failed");
+                } else {
+                    script.log("Operation timeout");
+                }
                 script.log("TX: " + lastSentHex);
+                script.log("Run Probe Communication to recover, or match module serial manually.");
             } else if (!probing) {
                 script.log("Command timeout, no response");
                 script.log("TX: " + lastSentHex);
@@ -330,7 +374,7 @@ function update(deltaTime) {
                     removeOSModule();
                     if (data.success) {
                         updateDetectedValues(data.baud, data.slave, data.fa73);
-                        setSerialBaudRate(data.baud);
+                        setSerialConfig(data.baud, data.fa73);
                         script.log("Probe complete, parameters updated");
                     } else {
                         var errMsg = "Probe failed";
