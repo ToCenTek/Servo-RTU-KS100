@@ -11,7 +11,7 @@
     "defaults": {
         "autoAdd": false,
         "Protocol": "Raw",
-        "BaudRate": 115200,
+        "BaudRate": 38400,
         "DataBits": 8,
         "Parity": "None",
         "StopBits": 1

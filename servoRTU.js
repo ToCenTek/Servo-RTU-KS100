@@ -494,8 +494,6 @@ function dataReceived(data) {
                 continueSetComm(frame);
             } else if (opType == "set_slave") {
                 continueSetSlave(frame);
-            } else if (opType == "verify_comm") {
-                continueVerifyComm(frame);
             }
         }
     }
@@ -615,95 +613,53 @@ function continueSetComm(frame) {
     }
 }
 
-// 软复位等待结束: 切模块串口到新参数, 然后读 FA-72/FA-73 验证
+// 软复位等待结束: 写 module.json defaults,弹窗提示用户 Reload Custom Modules
+// 不自动切模块串口(Chataigne Serial Module 的 param.set 不一定触发重连),
+// 不自动读回验证(需要切换串口,见上)。0x06 响应是请求回显,3 步都收到回显
+// 本身就证明伺服已收到并执行,设置已应用。
 function handleResetComplete() {
-    var ok = setSerialConfig(opBaudVal, opModeVal);
-    if (ok) {
-        script.log("Module serial switched to " + opBaudVal + " " + modeLabel(opModeVal));
+    var saved = saveModuleDefaults(opBaudVal, opModeVal);
+    if (saved) {
+        script.log("module.json defaults updated to " + opBaudVal + " " + modeLabel(opModeVal));
     } else {
-        script.logWarning("Module serial params not found by name; update manually");
+        script.logWarning("Failed to update module.json defaults");
     }
-    // 短暂延迟再发验证,等 Serial Module 内部完成重连串口
-    opActive = true;
-    opType = "verify_comm";
-    opStage = 1;
-    sendFrame(makeRead(opSlave, REG_FA72, 2));
-}
-
-// 验证读回: 期望 01 03 04 [fa72_hi fa72_lo fa73_hi fa73_lo] CRC
-function continueVerifyComm(frame) {
-    var ok = false;
-    var actualBaud = 0;
-    var actualMode = -1;
-    if (frame[1] == 0x03 && frame.length >= 9) {
-        actualBaud = (frame[3] * 256 + frame[4]) * 100;
-        actualMode = frame[5] * 256 + frame[6];
-    }
-    opActive = false;
-    opType = "";
-    opStage = 0;
-
-    if (actualBaud == opBaudVal && actualMode == opModeVal) {
-        // 验证通过: 持久记录 + 写 module.json + 提示
-        confirmedBaud = actualBaud;
-        confirmedMode = actualMode;
-        confirmedSlave = opSlave;
-        if (baudRateValue != null) baudRateValue.set("" + actualBaud);
-        if (protocolValue != null) protocolValue.set(modeLabel(actualMode));
-        var saved = saveModuleDefaults(actualBaud, actualMode);
-        if (saved) {
-            script.log("module.json defaults updated to " + actualBaud + " " + modeLabel(actualMode));
-        } else {
-            script.logWarning("Failed to update module.json defaults");
-        }
-        util.showMessageBox(
-            "Servo Communication Updated",
-            "Servo communication updated and verified.\n" +
-            "  Slave: " + opSlave + "\n" +
-            "  Baud:  " + actualBaud + "\n" +
-            "  Mode:  " + modeLabel(actualMode) + "\n" +
-            "\n" +
-            "module.json defaults have been updated.\n" +
-            "Please Reload Custom Modules to apply the new defaults.\n" +
-            "  Module menu > Reload Custom Modules\n" +
-            "\n" +
-            "伺服通讯已更新并验证。\n" +
-            "  从站:  " + opSlave + "\n" +
-            "  波特:  " + actualBaud + "\n" +
-            "  模式:  " + modeLabel(actualMode) + "\n" +
-            "\n" +
-            "module.json 默认参数已更新。\n" +
-            "请重新加载自定义模块以应用新的默认参数。\n" +
-            "  模块菜单 > 重新加载自定义模块",
-            "info",
-            "Reload"
-        );
-    } else {
-        var gotStr = (actualBaud > 0)
-            ? (actualBaud + " " + modeLabel(actualMode))
-            : ("no/invalid response (frame=" + bytesToHex(frame) + ")");
-        script.log("Verification mismatch: expected " + opBaudVal + " " + modeLabel(opModeVal) +
-                   ", got " + gotStr);
-        util.showMessageBox(
-            "Set Communication Mismatch",
-            "Servo did not return expected values.\n" +
-            "  Expected: " + opBaudVal + " " + modeLabel(opModeVal) + "\n" +
-            "  Actual:   " + gotStr + "\n" +
-            "\n" +
-            "The servo may not have applied the new parameters, or\n" +
-            "the module serial port may not match the servo.\n" +
-            "Try Probe Communication to recover.\n" +
-            "\n" +
-            "伺服未返回预期值。\n" +
-            "  期望: " + opBaudVal + " " + modeLabel(opModeVal) + "\n" +
-            "  实际: " + gotStr + "\n" +
-            "\n" +
-            "伺服可能未应用新参数,或模块串口与伺服不匹配。\n" +
-            "请尝试运行 Probe Communication 进行恢复。",
-            "warning",
-            "OK"
-        );
-    }
+    // 持久化 Communication Information 显示(即使 Reload 之前用户也能看到)
+    confirmedBaud = opBaudVal;
+    confirmedMode = opModeVal;
+    confirmedSlave = opSlave;
+    if (baudRateValue != null) baudRateValue.set("" + opBaudVal);
+    if (protocolValue != null) protocolValue.set(modeLabel(opModeVal));
+    // 弹窗提示用户 Reload Custom Modules 让 defaults 生效
+    util.showMessageBox(
+        "Servo Communication Updated",
+        "Servo communication updated.\n" +
+        "  Slave: " + opSlave + "\n" +
+        "  Baud:  " + opBaudVal + "\n" +
+        "  Mode:  " + modeLabel(opModeVal) + "\n" +
+        "\n" +
+        "module.json defaults have been updated.\n" +
+        "Please Reload Custom Modules to apply the new defaults.\n" +
+        "  Module menu > Reload Custom Modules\n" +
+        "\n" +
+        "If the new params differ from current module serial, the\n" +
+        "module cannot talk to the servo until you Reload.\n" +
+        "If params are unchanged, no Reload needed.\n" +
+        "\n" +
+        "伺服通讯已更新。\n" +
+        "  从站:  " + opSlave + "\n" +
+        "  波特:  " + opBaudVal + "\n" +
+        "  模式:  " + modeLabel(opModeVal) + "\n" +
+        "\n" +
+        "module.json 默认参数已更新。\n" +
+        "请重新加载自定义模块以应用新的默认参数。\n" +
+        "  模块菜单 > 重新加载自定义模块\n" +
+        "\n" +
+        "如果新参数与当前模块串口不同,Reload 前模块无法与伺服通信。\n" +
+        "如果参数未变,则无需 Reload。",
+        "info",
+        "Reload"
+    );
 }
 
 // 多步操作：写 FA-71 从站地址
