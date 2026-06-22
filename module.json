@@ -37,24 +37,20 @@
             "collapsed": true,
             "Slave Address": {
                 "type": "String",
-                "readOnly": true,
-                "description": "检测到的伺服从站地址\nDetected servo slave address"
+                "description": "检测到的伺服从站地址 (JS 自动更新)\nDetected servo slave address (auto-updated by JS)"
             },
             "Baud Rate": {
                 "type": "String",
-                "readOnly": true,
-                "description": "检测到的伺服波特率\nDetected servo baud rate"
+                "description": "检测到的伺服波特率 (JS 自动更新)\nDetected servo baud rate (auto-updated by JS)"
             },
             "Protocol": {
                 "type": "String",
-                "readOnly": true,
-                "description": "检测到的伺服协议模式\nDetected servo protocol"
+                "description": "检测到的伺服协议模式 (JS 自动更新)\nDetected servo protocol (auto-updated by JS)"
             },
             "Last Response": {
                 "type": "String",
                 "multiline": true,
-                "readOnly": true,
-                "description": "最后一组消息\nRX log"
+                "description": "最后一条/组命令的 16 进制 RX 消息, 多条分行\nLast command's RX hex (multi-line for multi-frame)"
             }
         }
     },

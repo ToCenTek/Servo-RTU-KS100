@@ -29,7 +29,7 @@ var responseValue = null;
 var baudRateValue = null;
 var protocolValue = null;
 var slaveAddressValue = null;
-var responseAccumulator = "";
+var lastResponseText = "";
 
 var REG_FA60 = 0x003C;  // 软复位
 var REG_FA71 = 0x0047;  // 从站地址
@@ -112,24 +112,30 @@ function makeWrite(slave, reg, value) {
     return [slave, 0x06, hi(reg), lo(reg), hi(value), lo(value)];
 }
 
-// 追加一行到 responseAccumulator + 推送给 UI
-function appendLog(prefix, line) {
-    if (responseAccumulator.length > 0) responseAccumulator += "\n";
-    responseAccumulator += prefix + ": " + line;
-    // 懒加载: 如果缓存引用是 null, 实时查找
+// 追加一行 16 进制 RX 帧到 Last Response (多行)
+function logRxFrame(hex) {
+    lastResponseText = (lastResponseText.length > 0) ? (lastResponseText + "\n" + hex) : hex;
+    writeLastResponse();
+}
+
+// 清空 Last Response
+function clearLog() {
+    lastResponseText = "";
+    writeLastResponse();
+}
+
+function writeLastResponse() {
     if (responseValue == null && local.values != null) {
         var ci = local.values.getChild("Communication Information");
         if (ci != null) responseValue = ci.getChild("Last Response");
     }
-    if (responseValue != null) responseValue.set(responseAccumulator);
+    if (responseValue != null) responseValue.set(lastResponseText);
 }
 
 function sendFrame(pdu) {
     var c = crc16(pdu);
     pdu.push(c[0], c[1]);
-    var str = bytesToStr(pdu);
-    script.log("-TX: " + str);
-    appendLog("TX", str);
+    script.log("-TX: " + bytesToStr(pdu));
     opTime = 0;
     rxBuffer = [];
     local.sendBytes(pdu);
@@ -143,19 +149,17 @@ function findParam(name) {
     return local.getChild(name);
 }
 
-// 从 local.values 重新获取子引用 (避免 init 时缓存的引用失效), 同时更新缓存
-function setCommunicationValues(slave, baud, protocol, info) {
+// 从 local.values 实时获取子引用, 同时更新缓存
+function setCommunicationValues(slave, baud, protocol) {
     if (local.values == null) return;
     var ci = local.values.getChild("Communication Information");
     if (ci == null) return;
     var sa = ci.getChild("Slave Address");
     var br = ci.getChild("Baud Rate");
     var pr = ci.getChild("Protocol");
-    var lr = ci.getChild("Last Response");
     if (sa != null) { sa.set("" + slave); slaveAddressValue = sa; }
     if (br != null) { br.set("" + baud); baudRateValue = br; }
     if (pr != null) { pr.set(protocol); protocolValue = pr; }
-    if (lr != null && info != null) { lr.set(info); responseValue = lr; }
     ci.setCollapsed(false);
 }
 
@@ -255,7 +259,7 @@ function showProbeResult(data) {
 
 function onProbeResult(data) {
     probing = false;
-    // 先恢复 Chataigne 串口 (setModuleEnabled(true) 会用原 port+baud 打开)
+    // 先恢复 Chataigne 串口
     setPortName(probeRestorePort);
     setModuleEnabled(true);
     removeOSModule();
@@ -267,10 +271,7 @@ function onProbeResult(data) {
         if (sp != null) sp.set(data.slave);
         var bp = findParam("baudRate");
         if (bp != null) bp.set(data.baud);
-        // 写 values (用实时查找,避免 init 时缓存失效)
-        var info = "Probe: slave=" + data.slave + " baud=" + data.baud + " protocol=" + data.protocol;
-        if (data.forced) info += " (forced 8N1)";
-        setCommunicationValues(data.slave, data.baud, "8N1", info);
+        setCommunicationValues(data.slave, data.baud, "8N1");
     } else {
         script.log(data.error || "Probe failed");
     }
@@ -284,6 +285,7 @@ function setBaudRate(slave, baud) {
     var baudNum = parseInt(baud, 10);
     if (slaveNum < 1 || slaveNum > 254) return;
     if (baudNum < 300 || baudNum > 115200) return;
+    clearLog();
     opActive = true;
     opType = "set_baud";
     opStage = 1;
@@ -320,6 +322,7 @@ function setSlaveAddress(newSlave) {
     var p = findParam("slaveAddress");
     var currentSlave = (p != null) ? p.get() : 1;
     if (currentSlave == newNum) { script.log("Slave already " + newNum); return; }
+    clearLog();
     opActive = true;
     opType = "set_slave";
     opStage = 1;
@@ -338,10 +341,9 @@ function continueSetSlave(frame) {
     opType = "";
     var p = findParam("slaveAddress");
     if (p != null) p.set(opSlave);
-    // 写 values
     var baudP = findParam("baudRate");
     var baud = (baudP != null) ? baudP.get() : 0;
-    setCommunicationValues(opSlave, baud, "8N1", "Set slave: " + opSlave);
+    setCommunicationValues(opSlave, baud, "8N1");
     script.log("Slave updated to " + opSlave);
     util.showMessageBox("Slave Address Updated",
         "Slave address updated to " + opSlave + ".\n\n从站地址已更新到 " + opSlave + "。",
@@ -352,7 +354,7 @@ function handleResetComplete() {
     opType = "";
     var bp = findParam("baudRate");
     if (bp != null) bp.set(opBaudVal);
-    setCommunicationValues(opSlave, opBaudVal, "8N1", "Set baud: " + opBaudVal);
+    setCommunicationValues(opSlave, opBaudVal, "8N1");
     script.log("Baud set to " + opBaudVal);
     util.showMessageBox("Baud Rate Set",
         "Baud rate set to " + opBaudVal + ".\n\n波特率已设置为 " + opBaudVal + "。",
@@ -380,7 +382,7 @@ function dataReceived(data) {
         if (frame == null) break;
         var str = bytesToStr(frame);
         script.log("-RX: " + str);
-        appendLog("RX", str);
+        logRxFrame(str);
         if (!opActive) continue;
         if (opType == "set_baud") continueSetBaud(frame);
         else if (opType == "set_slave") continueSetSlave(frame);
@@ -451,6 +453,6 @@ function sendRaw(hexCommand) {
     if (opActive || probing || closeTimer > 0) return;
     var body = hexToBytes(hexCommand);
     if (body.length < 2) return;
-    responseAccumulator = "";
+    clearLog();
     sendFrame(body);
 }
