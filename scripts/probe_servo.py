@@ -2,14 +2,15 @@
 """KS100 伺服 Modbus RTU 通信参数自动探测脚本.
 
 工作原理 (How it works):
-  通过串口依次尝试所有 (波特率, 数据位/校验/停止位) 组合, 在指定从站地址
-  上发送 Modbus 0x03 (读保持寄存器) 命令读取 0x0047~0x0049 (FA-71/FA-72/FA-73),
-  这三个寄存器分别保存: 站号 / 波特率 / 协议模式. 如果伺服以匹配的串口
-  参数和站号存在, 就会返回有效响应. 找到第一个有效响应即停止, 写入
-  /tmp/probe_result.json.
+  通过串口依次尝试所有 (波特率, 数据位/校验/停止位) 组合, 在每个候选从站地址
+  (1 ~ scan-end) 上发送 Modbus 0x03 (读保持寄存器) 命令读取 0x0047~0x0049
+  (FA-71/FA-72/FA-73), 这三个寄存器分别保存: 站号 / 波特率 / 协议模式.
+  如果伺服以匹配的串口参数和站号存在, 就会返回有效响应. 找到第一个有效
+  响应即停止 (因为假设总线上最多 1 个设备), 写入 /tmp/probe_result.json.
 
-调用: --slave N --port /dev/tty.usbserial-XXXX --output /tmp/probe_result.json
-  --slave N      要探测的从站地址 (默认 1)
+调用: --slave N --scan-end M --port /dev/tty.usbserial-XXXX --output /tmp/probe_result.json
+  --slave N      扫描起始从站地址 (默认 1)
+  --scan-end M   扫描结束从站地址 (默认 10, 含)
   --port P       指定串口设备 (默认自动检测)
   --output O     结果 JSON 路径 (默认 /tmp/probe_result.json)
 
@@ -17,16 +18,18 @@
   1. 总线上同时只能有 1 个从站(其他从站断电), 否则多从站同时响应会导致
      Modbus 总线冲突, CRC 错误
   2. 调用方负责保证总线上只有一个从站
+  3. 扫描范围 (slave ~ scan-end) 必须包含该设备的实际站号
 
 返回结果 (写入 --output):
   {
     "success": True/False,
     "baud": <int>,                  # 探测到的波特率
-    "slave": <int>,                 # 探测到的从站
+    "slave": <int>,                 # 探测到的从站 (从 0x0047 读出, 反映伺服实际地址)
     "protocol": "8N1"|"8N2"|...,    # 协议模式标签
     "fa72": <int>,                  # FA-72 寄存器值 (= baud / 100)
     "fa73": <int>,                  # FA-73 寄存器值 (0=8N2 1=8E1 2=8O1 3=8N1)
     "port": "/dev/...",             # 找到伺服的串口
+    "scan_range": [start, end],     # 扫描范围
   }
 """
 import sys
@@ -150,8 +153,9 @@ def write_result(result, path):
 
 def main():
     # 默认参数
-    slave = 1             # 默认探测从站 1
-    port = None           # None = 自动检测
+    slave_start = 1
+    slave_end = 10          # 默认扫 1~10, 覆盖大部分场景, 速度可接受
+    port = None             # None = 自动检测
     output = "/tmp/probe_result.json"
 
     # 解析命令行参数
@@ -159,7 +163,12 @@ def main():
     while i < len(sys.argv):
         a = sys.argv[i]
         if a == '--slave' and i + 1 < len(sys.argv):
-            slave = int(sys.argv[i + 1])
+            slave_start = int(sys.argv[i + 1])
+            i += 2
+        elif a == '--scan-end' and i + 1 < len(sys.argv):
+            slave_end = int(sys.argv[i + 1])
+            if slave_end < slave_start:
+                slave_end = slave_start
             i += 2
         elif a == '--port' and i + 1 < len(sys.argv):
             port = sys.argv[i + 1]; i += 2
@@ -179,36 +188,42 @@ def main():
         sys.exit(1)
 
     # 扫描循环:
-    #   外层: 波特率 115200 -> 4800 (高频优先, 常见配置优先)
-    #     内层: 协议模式 (8N1/8N2 优先, 失败再 8E1/8O1)
+    #   外层: 从站地址 slave_start ~ slave_end (假设总线上最多 1 个)
+    #     中层: 波特率 115200 -> 4800 (高频优先)
+    #       内层: 协议模式 (8N1/8N2 优先, 失败再 8E1/8O1)
     #   任意组合成功就 sys.exit(0), 找到第一个即停止.
     #
     # 多从站注意事项: 多个 KS100 同时上电, 对同一请求都会响应, 电平叠加
     # 会导致模块收到 CRC 错误的乱码. 探测前必须保证总线上只有 1 个从站.
-    for baud in BAUD_RATES:
-        # Fast pass: 8N1 和 8N2 是出厂默认和最常见模式, 优先尝试
-        for mode_key in ["8N1", "8N2"]:
-            for p in ports:
-                r = try_mode(p, baud, mode_key, slave)
-                if r:
-                    write_result(r, output)
-                    print(json.dumps(r))
-                    sys.exit(0)
+    # 实际站号通过 FA-71 寄存器读出 (在响应帧中), 不需要预先知道.
+    for slave in range(slave_start, slave_end + 1):
+        for baud in BAUD_RATES:
+            # Fast pass: 8N1 和 8N2 是出厂默认和最常见模式, 优先尝试
+            for mode_key in ["8N1", "8N2"]:
+                for p in ports:
+                    r = try_mode(p, baud, mode_key, slave)
+                    if r:
+                        r["scan_range"] = [slave_start, slave_end]
+                        write_result(r, output)
+                        print(json.dumps(r))
+                        sys.exit(0)
 
-        # Fallback: 8E1 和 8O1 是带校验位的少数情况
-        for mode_key in ["8E1", "8O1"]:
-            for p in ports:
-                r = try_mode(p, baud, mode_key, slave)
-                if r:
-                    write_result(r, output)
-                    print(json.dumps(r))
-                    sys.exit(0)
+            # Fallback: 8E1 和 8O1 是带校验位的少数情况
+            for mode_key in ["8E1", "8O1"]:
+                for p in ports:
+                    r = try_mode(p, baud, mode_key, slave)
+                    if r:
+                        r["scan_range"] = [slave_start, slave_end]
+                        write_result(r, output)
+                        print(json.dumps(r))
+                        sys.exit(0)
 
     # 全部组合都试过没找到
     write_result({
         "success": False,
         "error": "未找到伺服",
-        "detail": "探测 slave={}, 波特率/协议组合均无响应".format(slave),
+        "detail": "扫描 slave {}~{}, 所有波特率/协议组合均无响应".format(slave_start, slave_end),
+        "scan_range": [slave_start, slave_end]
     }, output)
     sys.exit(1)
 
