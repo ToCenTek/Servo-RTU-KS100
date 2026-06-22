@@ -11,7 +11,7 @@
     "defaults": {
         "autoAdd": false,
         "Protocol": "Raw",
-        "BaudRate": 115200,
+        "BaudRate": 38400,
         "DataBits": 8,
         "Parity": "None",
         "StopBits": 1
@@ -74,13 +74,13 @@
         "Get Communication": {
             "menu": "Settings",
             "callback": "probeCommunication",
-            "description": "自动探索伺服通信参数: 遍历波特率 4800~115200, 扫描从站 (默认 1~10)\nAuto-detect servo: scan baud 4800~115200, scan slave 1~N (default 1~10)",
+            "description": "自动探索伺服通信参数: 扫描波特率 × 协议 × 从站, 找到就停\nAuto-detect servo: scan baud/protocol/slave, stop on first hit",
             "parameters": {
                 "Scan End": {
                     "type": "Integer",
                     "hexMode": true,
-                    "description": "扫描结束从站地址 (含). 默认 10. 越大越慢, 推荐最大 32.\nEnd slave (included). Default 10. Max recommended 32.",
-                    "default": 10,
+                    "description": "扫描结束从站地址 (含). 默认 254 (Modbus 最大地址). 找到响应就停, 实际不会扫满.\nEnd slave (default 254). Stops on first hit, so usually fast.",
+                    "default": 254,
                     "min": 1,
                     "max": 254
                 }

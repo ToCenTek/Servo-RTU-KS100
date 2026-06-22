@@ -9,10 +9,10 @@ var rxBuffer = [];
 
 var probing = false;
 var probeSlave = 1;
-var probeSlaveEnd = 10;  // 默认扫描 1~10
+var probeSlaveEnd = 254;  // 默认扫 Modbus 完整地址 1~254, 找到就停
 var probePollCount = 0;
 var probeTotalPolls = 0;
-var probeMaxPolls = 240;
+var probeMaxPolls = 600;  // 默认扫描范围更大, 给足时间
 var probeRestoreBaud = 0;
 var probeRestoreMode = -1;
 
@@ -581,27 +581,20 @@ function tryExtractFrame() {
     return frame;
 }
 
-// 命令：获取伺服通信参数（外部 Python 脚本）
-// 自动扫描 slave 1~slaveEnd, 找到那个唯一的从站
-// 前提: 总线上同时只能有 1 个从站(其他从站断电), 否则多从站同时
-//       响应会导致 Modbus CRC 错误,探测失败
-// 实际从站地址从 FA-71 寄存器读出 (响应帧),不依赖 UI 参数
+// 命令：获取伺服通信参数
+// 自动扫描 1~slaveEnd, 找到那个唯一的从站(假设总线上只有 1 个)
+// 实际从站地址从 FA-71 寄存器读出, 不依赖 UI 参数
 function getCommunication(slaveEnd) {
     if (waiting || probing) return;
-    if (slaveEnd == null || slaveEnd < 1) {
-        slaveEnd = 10;  // 默认扫到 10, 覆盖大部分场景
-    }
-    if (slaveEnd > 254) {
-        slaveEnd = 254;
-    }
+    if (slaveEnd == null || slaveEnd < 1) slaveEnd = 254;
+    if (slaveEnd > 254) slaveEnd = 254;
     probeSlave = 1;
     probeSlaveEnd = slaveEnd;
     probing = false;
 
     util.showMessageBox("Please wait...",
-        "探测伺服通信参数 (扫描 slave 1~" + slaveEnd + "), 这需要一些时间...\n" +
-        "完成后将重新使能当前模块\n" +
-        "请将通信参数设置为伺服一致\n" +
+        "探测伺服通信参数 (扫描 slave 1~" + slaveEnd + ")...\n" +
+        "请确保总线上只有 1 个从站\n" +
         "\n" +
         "Detecting servo: scan slave 1~" + slaveEnd + "...",
         "info", "OK");
@@ -839,10 +832,10 @@ function setCommunication(slave, baud, mode) {
     sendFrame(makeWrite(slave, REG_FA72, baudDiv));
 }
 
-// 命令: Get Communication (命令面板触发)
+// 命令: Get Communication
 // 接受 Scan End 一个参数, 不依赖 parameters.Slave Address
 function probeCommunication(scanEnd) {
-    if (scanEnd == null) scanEnd = 10;
+    if (scanEnd == null) scanEnd = 254;
     getCommunication(scanEnd);
 }
 
@@ -871,9 +864,9 @@ function setSlaveAddress(currentSlave, newSlave) {
 
 // Parameters 面板参数变化回调
 function moduleParameterChanged(param) {
-    // Parameters 中的 Get Communication Trigger: 默认扫 1~10, 不依赖 parameters.Slave Address
+    // Get Communication Trigger: 默认扫 1~254, 不依赖 parameters.Slave Address
     if (param.niceName == "Get Communication") {
-        getCommunication(10);
+        getCommunication(254);
     }
 }
 
