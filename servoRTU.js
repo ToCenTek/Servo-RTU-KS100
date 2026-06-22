@@ -309,6 +309,79 @@ function strIndexOf(s, sub, start) {
 
 // 在 JSON 文本中替换 "key": <value> 字段值
 // key 包含引号 (e.g. '"baudRate"')
+// 手写 indexOf (JUCE 引擎不支持 s.indexOf)
+function strIndexOf(s, sub, start) {
+    if (sub.length == 0) return start || 0;
+    if (start == null) start = 0;
+    if (s.length < sub.length + start) return -1;
+    var lastStart = s.length - sub.length;
+    for (var i = start; i <= lastStart; i++) {
+        var match = true;
+        for (var j = 0; j < sub.length; j++) {
+            if (s.charAt(i + j) != sub.charAt(j)) {
+                match = false;
+                break;
+            }
+        }
+        if (match) return i;
+    }
+    return -1;
+}
+
+// 在 JSON 文本中替换 "key": <value> 字段值
+// 找不到时返回原 content (不中断, 让调用方决定)
+function simpleReplaceField(content, key, newValue) {
+    var keyIdx = strIndexOf(content, key);
+    if (keyIdx < 0) return content;
+    var colonIdx = strIndexOf(content, ':', keyIdx);
+    if (colonIdx < 0) return content;
+    var valStart = colonIdx + 1;
+    while (valStart < content.length) {
+        var c = content.charAt(valStart);
+        if (c != ' ' && c != '\n' && c != '\r' && c != '\t') break;
+        valStart++;
+    }
+    var valEnd = valStart;
+    if (valStart < content.length && content.charAt(valStart) == '"') {
+        valEnd = strIndexOf(content, '"', valStart + 1);
+        if (valEnd < 0) return content;
+        valEnd = valEnd + 1;
+    } else {
+        while (valEnd < content.length) {
+            var c2 = content.charAt(valEnd);
+            if (c2 == ',' || c2 == '}' || c2 == '\n') break;
+            valEnd++;
+        }
+    }
+    return content.substring(0, valStart) + newValue + content.substring(valEnd);
+}
+
+// 更新 module.json defaults 块 (4 个字段)
+// 保留原文件格式. 如果 verify 失败, 报警 (file 已被截断)
+// 返回: true (成功) / false (失败)
+function safeUpdateDefaults(baud, mode) {
+    var dir = script.getScriptDirectory();
+    var modulePath = dir + "/module.json";
+    if (!util.fileExists(modulePath)) return false;
+    var content = util.readFile(modulePath, false);
+    if (content == null) return false;
+    var parts = modeToSerial(mode);
+    var newContent = simpleReplaceField(content, '"baudRate"', "" + baud);
+    newContent = simpleReplaceField(newContent, '"dataBits"', "" + parts[0]);
+    newContent = simpleReplaceField(newContent, '"Parity"', '"' + parts[1] + '"');
+    newContent = simpleReplaceField(newContent, '"stopBits"', "" + parts[2]);
+    if (newContent == content) return false;
+    util.writeFile(modulePath, newContent, true);
+    // 验证: 读回看是否完整
+    var verify = util.readFile(modulePath, false);
+    if (verify == null || verify.length < newContent.length - 100) {
+        script.logWarning("safeUpdateDefaults: write truncated! " +
+            "content=" + newContent.length + " verify=" + (verify == null ? "null" : verify.length));
+        return false;
+    }
+    return true;
+}
+
 // 兼容旧调用：仅设置波特率
 function setSerialBaudRate(baud) {
     var p = findParam(["baudrate", "BaudRate", "baud_rate"]);
@@ -734,49 +807,58 @@ function continueSetComm(frame) {
     }
 }
 
-// 软复位等待结束: 同步 Chataigne Serial Module 内置参数, 调 init() 重新初始化
-// 不写 module.json (JUCE 引擎 writeFile 不可靠, 会截断内容)
-// 流程: setSerialConfig() 设置 local.parameters.baudRate
-//        Chataigne 实时响应, 模块继续工作
-//        DataBits/Parity/StopBits 由 Chataigne 在模块创建时从 defaults 块读,
-//        运行时不能改. 用户需要手动改 module.json defaults + Reload Modules.
+// 软复位等待结束: 同步 Chataigne Serial Module, 写 module.json defaults, 提示 Reload
+// 流程: safeUpdateDefaults() 写 file (有截断风险, 已加验证)
+//        setSerialConfig() 设 local.parameters.baudRate (实时)
+//        用户必须 Reload Custom Modules 让 Chataigne 重新读 defaults
+//        (试过 trySetModuleEnabled toggle, 但 Chataigne 不重读, 必须 Reload)
 function handleResetComplete() {
-    // 改 local.parameters.baudRate (Chataigne 实时改, 不需 Reload)
+    // 1) 尝试写 module.json defaults (4 字段)
+    var wroteDefaults = safeUpdateDefaults(opBaudVal, opModeVal);
+    if (wroteDefaults) {
+        script.log("module.json defaults updated");
+    } else {
+        script.logWarning("Failed to write module.json defaults (file may be truncated)");
+    }
+    // 2) 设 local.parameters.baudRate (Chataigne 实时改, 不需 Reload)
     var ok = setSerialConfig(opBaudVal, opModeVal);
     if (ok) {
         script.log("Module baudRate set: " + opBaudVal);
     } else {
         script.logWarning("Module baudRate not found; update manually");
     }
-    // 重新 init (重新解析 parameters, 更新 values 显示)
+    // 3) 重新 init
     init();
-    // 弹窗
-    util.showMessageBox(
-        "Servo Communication Updated",
+    // 4) 弹窗 (总是提示 Reload, 因为 mode 改了需要 Chataigne 重新读 defaults)
+    var title = "Servo Communication Updated";
+    var body =
         "Servo communication updated.\n" +
         "  Slave: " + opSlave + "\n" +
-        "  Baud:  " + opBaudVal + " (applied to module)\n" +
-        "  Mode:  " + modeLabel(opModeVal) + " (servo updated)\n" +
+        "  Baud:  " + opBaudVal + "\n" +
+        "  Mode:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "BaudRate applied to Chataigne module's serial port.\n" +
-        "DataBits/Parity/StopBits are read from module.json defaults\n" +
-        "at module creation. To change mode:\n" +
-        "  1. Edit module.json defaults block (DataBits/Parity/StopBits)\n" +
+        (wroteDefaults ? "module.json defaults updated.\n" : "WARNING: module.json write may have failed.\n") +
+        "\n" +
+        "NEXT STEPS (Chataigne reads defaults only at module creation,\n" +
+        "and enable/disable toggle does NOT re-read them):\n" +
+        "  1. Verify module.json: cat module.json | head -20\n" +
+        (wroteDefaults ? "" : "     (if truncated, restore: git checkout HEAD -- module.json)\n") +
         "  2. Module menu > Reload Custom Modules\n" +
+        "  3. Module will re-create with new defaults\n" +
         "\n" +
         "伺服通讯已更新。\n" +
         "  从站:  " + opSlave + "\n" +
-        "  波特:  " + opBaudVal + " (已应用到模块)\n" +
-        "  模式:  " + modeLabel(opModeVal) + " (伺服已更新)\n" +
+        "  波特:  " + opBaudVal + "\n" +
+        "  模式:  " + modeLabel(opModeVal) + "\n" +
         "\n" +
-        "波特率已应用到 Chataigne 模块串口。\n" +
-        "DataBits/Parity/StopBits 在模块创建时从 defaults 块读取, 运行时不能改。\n" +
-        "要切换模式:\n" +
-        "  1. 编辑 module.json defaults 块 (DataBits/Parity/StopBits)\n" +
-        "  2. 模块菜单 > 重新加载自定义模块",
-        "info",
-        "OK"
-    );
+        (wroteDefaults ? "module.json defaults 已更新。\n" : "警告: module.json 写入可能失败。\n") +
+        "\n" +
+        "下一步 (Chataigne 只在模块创建时读 defaults, 启停模块不重读):\n" +
+        "  1. 验证 module.json: cat module.json | head -20\n" +
+        (wroteDefaults ? "" : "     (如果截断, 恢复: git checkout HEAD -- module.json)\n") +
+        "  2. 模块菜单 > 重新加载自定义模块\n" +
+        "  3. 模块会用新 defaults 重建";
+    util.showMessageBox(title, body, "info", "OK");
 }
 
 // 多步操作：写 FA-71 从站地址

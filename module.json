@@ -11,10 +11,10 @@
     "defaults": {
         "autoAdd": false,
         "Protocol": "Raw",
-        "baudRate": 57600,
+        "baudRate": 115200,
         "dataBits": 8,
         "Parity": "None",
-        "stopBits": 2
+        "stopBits": 1
     },
     "scripts": ["servoRTU.js"],
     "parameters": {
