@@ -425,9 +425,15 @@ function safeUpdateDefaults(baud, mode) {
     if (blockEnd < 0) blockEnd = strIndexOf(content, '"parameters"', braceStart);
     if (blockEnd < 0) return false;
     var block = content.substring(braceStart, blockEnd);
+    script.log("safeUpdateDefaults: block len=" + block.length);
+    script.log("safeUpdateDefaults: strIndexOf BaudRate=" + strIndexOf(block, '"BaudRate"'));
+    script.log("safeUpdateDefaults: strIndexOf DataBits=" + strIndexOf(block, '"DataBits"'));
+    script.log("safeUpdateDefaults: strIndexOf Parity=" + strIndexOf(block, '"Parity"'));
+    script.log("safeUpdateDefaults: strIndexOf StopBits=" + strIndexOf(block, '"StopBits"'));
     var parts = modeToSerial(mode);
     var c1 = replaceJsonField(block, "BaudRate", "" + baud);
     if (c1 == null) { script.logWarning("safeUpdateDefaults: BaudRate not found in block"); return false; }
+    script.log("safeUpdateDefaults: c1 len=" + c1.length + " DataBits in c1=" + (strIndexOf(c1, '"DataBits"') >= 0));
     var c2 = replaceJsonField(c1, "DataBits", "" + parts[0]);
     if (c2 == null) { script.logWarning("safeUpdateDefaults: DataBits not found in block"); return false; }
     var c3 = replaceJsonField(c2, "Parity", '"' + parts[1] + '"');
