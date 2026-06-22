@@ -1,0 +1,152 @@
+{
+    "type": "Serial",
+    "name": "Servo RTU KS100",
+    "path": "ToCenTek",
+    "version": "0.2.0",
+    "description": "KS100 伺服 Modbus RTU 工具模块\nKS100 servo Modbus RTU utility module",
+    "hasInput": true,
+    "hasOutput": true,
+    "hideDefaultCommands": true,
+    "hideDefaultParameters": ["protocol", "messageStructure", "customSeparator", "firstValueIsTheName"],
+    "defaults": {
+        "autoAdd": false,
+        "Protocol": "Raw",
+        "BaudRate": 9600,
+        "DataBits": 8,
+        "Parity": "None",
+        "StopBits": 2
+    },
+    "scripts": ["servoRTU.js"],
+    "parameters": {
+        "Slave Address": {
+            "type": "Integer",
+            "hexMode": true,
+            "default": 1,
+            "min": 1,
+            "max": 254,
+            "description": "从站地址\nSlave address"
+        },
+        "Get Communication": {
+            "type": "Trigger",
+            "description": "探测伺服通信参数\nProbe servo communication parameters"
+        }
+    },
+    "values": {
+        "Communication Information": {
+            "type": "Container",
+            "collapsed": true,
+            "Baud Rate": {
+                "type": "String",
+                "readOnly": true,
+                "description": "检测到的伺服串口波特率\nDetected servo serial baud rate"
+            },
+            "Protocol": {
+                "type": "String",
+                "readOnly": true,
+                "description": "检测到的伺服串口模式\nDetected servo serial mode"
+            },
+            "Last Response": {
+                "type": "String",
+                "multiline": true,
+                "readOnly": true,
+                "description": "最后一段消息\nRX log"
+            }
+        }  
+    },
+    "commands": {
+        "Send Raw": {
+            "menu": "",
+            "callback": "sendRaw",
+            "description": "发送原始 Modbus RTU 命令(自动追加 CRC16)\nSend raw Modbus RTU command (auto CRC16)",
+            "parameters": {
+                "Hex Command": {
+                    "type": "String",
+                    "default": "01 03 00 47 00 03",
+                    "description": "不含 CRC 的十六进制字节\nHex bytes without CRC"
+                }
+            }
+        },
+        "Get Communication": {
+            "menu": "Settings",
+            "callback": "probeCommunication",
+            "description": "自动探索伺服通信参数：遍历波特率 4800~115200, 检测站号和串口模式\nAuto-detect servo: scan baud 4800~115200, detect slave address and protocol mode",
+            "parameters": {
+                "Slave Address": {
+                    "type": "Integer",
+                    "hexMode": true,
+                    "description": "要探测的从站地址\nSlave address to probe",
+                    "default": 1,
+                    "min": 1,
+                    "max": 254   
+                }
+            }
+        },
+        "Set Communication": {
+            "menu": "Settings",
+            "callback": "setCommunication",
+            "description": "设置伺服串口参数\nSet servo serial parameters",
+            "parameters": { 
+                "Slave Address": {
+                    "type": "Integer",
+                    "hexMode": true,
+                    "description": "要操作的从站地址\nSlave address",
+                    "default": 1,
+                    "min": 1,
+                    "max": 254   
+                },
+                "Baud Rate":{
+                    "type": "Enum",
+                    "default": "波特率\nBaud rate",
+                    "options":{
+                        "115200": 115200,
+                        "57600": 57600,
+                        "38400": 38400,
+                        "19200": 19200, 
+                        "9600": 9600,
+                        "4800": 4800,
+                        "2400": 2400,
+                        "1200": 1200,
+                        "600": 600,
+                        "300": 300
+                    }
+                },
+                "Protocol":{
+                    "type": "Enum",
+                    "default": "协议\nProtocol",
+                    "options":{
+                        "8 N 1": "8N1",
+                        "8 N 2": "8N2",
+                        "8 E 1": "8E1",
+                        "8 E 2": "8E2",
+                        "8 O 1": "8O1",
+                        "8 O 2": "8O2"
+                    }
+                }
+            }
+        },
+        "Set Slave Address": {
+            "menu": "Settings",
+            "callback": "setSlaveAddress",
+            "description": "修改伺服站号\nSet servo slave address",
+            "parameters": {
+                "Slave Address": {
+                    "type": "Integer",
+                    "hexMode": true,
+                    "description": "要设置的从站地址\nSlave address",
+                    "default": 1,
+                    "min": 1,
+                    "max": 254   
+                },
+                "New Slave Address": {
+                    "type": "Integer",
+                    "hexMode": true,
+                    "description": "新的从站地址\nNew Slave address",
+                    "default": 1,
+                    "min": 1,
+                    "max": 254   
+                }
+            }
+        }
+    } 
+}
+
