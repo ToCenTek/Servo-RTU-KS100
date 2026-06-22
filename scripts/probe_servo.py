@@ -73,7 +73,8 @@ def write_result(result, path):
         json.dump(result, f)
 
 def main():
-    slave = 1
+    slave_start = 1
+    slave_end = 1
     port = None
     output = "/tmp/probe_result.json"
 
@@ -81,7 +82,14 @@ def main():
     while i < len(sys.argv):
         a = sys.argv[i]
         if a == '--slave' and i + 1 < len(sys.argv):
-            slave = int(sys.argv[i + 1]); i += 2
+            slave_start = int(sys.argv[i + 1])
+            slave_end = slave_start
+            i += 2
+        elif a == '--scan-end' and i + 1 < len(sys.argv):
+            slave_end = int(sys.argv[i + 1])
+            if slave_end < slave_start:
+                slave_end = slave_start
+            i += 2
         elif a == '--port' and i + 1 < len(sys.argv):
             port = sys.argv[i + 1]; i += 2
         elif a == '--output' and i + 1 < len(sys.argv):
@@ -98,27 +106,37 @@ def main():
         write_result({"success": False, "error": "未检测到串口设备"}, output)
         sys.exit(1)
 
-    # Fast pass: try common modes (8N1, 8N2) on all baud rates
-    for baud in BAUD_RATES:
-        for mode_key in ["8N1", "8N2"]:
-            for p in ports:
-                r = try_mode(p, baud, mode_key, slave)
-                if r:
-                    write_result(r, output)
-                    print(json.dumps(r))
-                    sys.exit(0)
+    # 扫描从 slave_start 到 slave_end 的所有站号
+    # 每个站号内部: 优先 8N1/8N2, 失败再 8E1/8O1
+    # 注意: 多从站同时响应同一请求会导致总线冲突,扫描前需保证总线上
+    # 只有 1 个从站(地址唯一),否则扫描结果不可信
+    for slave in range(slave_start, slave_end + 1):
+        # Fast pass: try common modes (8N1, 8N2) on all baud rates
+        for baud in BAUD_RATES:
+            for mode_key in ["8N1", "8N2"]:
+                for p in ports:
+                    r = try_mode(p, baud, mode_key, slave)
+                    if r:
+                        r["scan_range"] = [slave_start, slave_end]
+                        write_result(r, output)
+                        print(json.dumps(r))
+                        sys.exit(0)
 
-    # Fallback: try parity modes (8E1, 8O1)
-    for baud in BAUD_RATES:
-        for mode_key in ["8E1", "8O1"]:
-            for p in ports:
-                r = try_mode(p, baud, mode_key, slave)
-                if r:
-                    write_result(r, output)
-                    print(json.dumps(r))
-                    sys.exit(0)
+        # Fallback: try parity modes (8E1, 8O1)
+        for baud in BAUD_RATES:
+            for mode_key in ["8E1", "8O1"]:
+                for p in ports:
+                    r = try_mode(p, baud, mode_key, slave)
+                    if r:
+                        r["scan_range"] = [slave_start, slave_end]
+                        write_result(r, output)
+                        print(json.dumps(r))
+                        sys.exit(0)
 
-    write_result({"success": False, "error": "遍历所有波特率和协议模式后未找到伺服"}, output)
+    write_result({"success": False,
+                  "error": "未找到伺服",
+                  "detail": "扫描 slave {}~{}, 所有波特率/协议组合均无响应".format(slave_start, slave_end),
+                  "scan_range": [slave_start, slave_end]}, output)
     sys.exit(1)
 
 if __name__ == "__main__":

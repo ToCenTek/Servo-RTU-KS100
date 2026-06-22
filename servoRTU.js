@@ -1,6 +1,7 @@
 var responseValue = null;
 var baudRateValue = null;
 var protocolValue = null;
+var slaveAddressValue = null;
 
 var waiting = false;
 var waitTime = 0;
@@ -8,9 +9,10 @@ var rxBuffer = [];
 
 var probing = false;
 var probeSlave = 1;
+var probeSlaveEnd = 1;
 var probePollCount = 0;
 var probeTotalPolls = 0;
-var probeMaxPolls = 120;
+var probeMaxPolls = 240;
 var probeRestoreBaud = 0;
 var probeRestoreMode = -1;
 
@@ -312,11 +314,17 @@ function writeShellWrapper() {
 function updateDetectedValues(baud, slave, mode) {
     probeRestoreBaud = baud;
     probeRestoreMode = mode;
+    confirmedBaud = baud;
+    confirmedMode = mode;
+    confirmedSlave = slave;
     if (baudRateValue != null) {
         baudRateValue.set("" + baud);
     }
     if (protocolValue != null) {
         protocolValue.set(modeLabel(mode));
+    }
+    if (slaveAddressValue != null) {
+        slaveAddressValue.set("" + slave);
     }
     var ci = local.values.getChild("Communication Information");
     if (ci != null) {
@@ -398,6 +406,7 @@ function init() {
             responseValue = ci.getChild("Last Response");
             baudRateValue = ci.getChild("Baud Rate");
             protocolValue = ci.getChild("Protocol");
+            slaveAddressValue = ci.getChild("Slave Address");
         }
     }
     // 从 module.json 的 defaults 还原 Communication Information 显示
@@ -568,15 +577,31 @@ function tryExtractFrame() {
 }
 
 // 命令：获取伺服通信参数（外部 Python 脚本）
-function getCommunication(slaveToProbe) {
+// slaveStart/slaveEnd: 扫描的站号范围(均含),用于在 485 总线上多从站时定位
+// 警告: 若总线上有多个从站在不同地址,必须保证只一个从站通电,否则多从站同时
+//       响应会导致 Modbus CRC 错误,扫描失败
+function getCommunication(slaveStart, slaveEnd) {
     if (waiting || probing) return;
-    if (slaveToProbe < 1 || slaveToProbe > 254) {
-        slaveToProbe = 1;
+    if (slaveStart == null || slaveStart < 1 || slaveStart > 254) {
+        slaveStart = 1;
     }
-    probeSlave = slaveToProbe;
+    if (slaveEnd == null || slaveEnd < slaveStart) {
+        slaveEnd = slaveStart;
+    }
+    if (slaveEnd > 254) {
+        slaveEnd = 254;
+    }
+    probeSlave = slaveStart;
+    probeSlaveEnd = slaveEnd;
     probing = false;
 
-    util.showMessageBox("Please wait...", "探测伺服通信参数, 这需要一些时间...\n完成后将重新使能当前模块\n请将通信参数设置为伺服一致\nDetecting servo communication parameters...", "info", "OK");
+    util.showMessageBox("Please wait...",
+        "探测伺服通信参数 (slave " + slaveStart + "~" + slaveEnd + "), 这需要一些时间...\n" +
+        "完成后将重新使能当前模块\n" +
+        "请将通信参数设置为伺服一致\n" +
+        "\n" +
+        "Detecting servo communication parameters (slave " + slaveStart + "~" + slaveEnd + ")...",
+        "info", "OK");
 
     if (!trySetModuleEnabled(false)) {
         script.log("Cannot close port, disable module or close it manually then probe");
@@ -592,9 +617,12 @@ function getCommunication(slaveToProbe) {
 
     writeShellWrapper();
 
-    var cmd = "/bin/bash " + SHELL_PATH + " --slave " + probeSlave + " --output " + RESULT_PATH;
+    var cmd = "/bin/bash " + SHELL_PATH +
+              " --slave " + probeSlave +
+              " --scan-end " + probeSlaveEnd +
+              " --output " + RESULT_PATH;
 
-    script.log("Probing servo parameters (slave " + probeSlave + ")");
+    script.log("Probing servo parameters (slave " + probeSlave + "~" + probeSlaveEnd + ")");
 
     util.writeFile(RESULT_PATH, '{"success":false,"status":"probing"}', true);
 
@@ -717,8 +745,9 @@ function saveModuleSlaveAddress(newSlave) {
         script.logWarning("saveModuleSlaveAddress: 'Slave Address' field not found");
         return false;
     }
-    // 找下一个 "Get Communication" 块作为结束边界
-    var endIdx = content.indexOf('"Get Communication"', idx);
+    // 找下一个 parameters 字段("scripts" 之前)作为结束边界
+    // (这样不会误把 commands 部分的 "Slave Address" 也改掉)
+    var endIdx = content.indexOf('"scripts"', idx);
     if (endIdx < 0) endIdx = content.length;
     var block = content.substring(idx, endIdx);
     var newBlock = block.replace(
@@ -807,6 +836,16 @@ function setCommunication(slave, baud, mode) {
     sendFrame(makeWrite(slave, REG_FA72, baudDiv));
 }
 
+// 命令: Get Communication (命令面板触发)
+// 接受 Slave Address 和 Scan End 两个参数
+// 注意: 与 Parameters.Slave Address 参数的区别 — 命令参数是 UI 临时值,
+//       不影响 module.json defaults,也不会被 init() 还原
+function probeCommunication(slaveStart, slaveEnd) {
+    if (slaveStart == null) slaveStart = 1;
+    if (slaveEnd == null) slaveEnd = slaveStart;
+    getCommunication(slaveStart, slaveEnd);
+}
+
 // 命令：设置从站地址
 // 注意: 成功修改后,模块将使用新站号与伺服通信
 // 失败最常见原因: currentSlave 与伺服实际站号不一致(可能之前已改过但 UI 未更新)
@@ -832,14 +871,9 @@ function setSlaveAddress(currentSlave, newSlave) {
 
 // Parameters 面板参数变化回调
 function moduleParameterChanged(param) {
-    if (param.niceName == "Get Communication") {
-        var slaveAddr = null;
-        if (local.parameters != null) {
-            slaveAddr = local.parameters.getChild("Slave Address");
-        }
-        var slave = 1;
-        if (slaveAddr != null) slave = slaveAddr.get();
-        getCommunication(slave);
+    // Slave Address 改变时, 自动同步确认值(可选)
+    if (param.name == "Slave Address") {
+        // 这里只记录,不主动触发探测
     }
 }
 

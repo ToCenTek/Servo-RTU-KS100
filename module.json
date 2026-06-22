@@ -24,17 +24,18 @@
             "default": 1,
             "min": 1,
             "max": 254,
-            "description": "从站地址\nSlave address"
-        },
-        "Get Communication": {
-            "type": "Trigger",
-            "description": "探测伺服通信参数\nProbe servo communication parameters"
+            "description": "从站地址 (1~254)\nSlave address used for all Modbus commands and as default scan start"
         }
     },
     "values": {
         "Communication Information": {
             "type": "Container",
             "collapsed": true,
+            "Slave Address": {
+                "type": "String",
+                "readOnly": true,
+                "description": "检测到的伺服从站地址\nDetected servo slave address"
+            },
             "Baud Rate": {
                 "type": "String",
                 "readOnly": true,
@@ -51,7 +52,7 @@
                 "readOnly": true,
                 "description": "最后一段消息\nRX log"
             }
-        }  
+        }
     },
     "commands": {
         "Send Raw": {
@@ -69,15 +70,23 @@
         "Get Communication": {
             "menu": "Settings",
             "callback": "probeCommunication",
-            "description": "自动探索伺服通信参数：遍历波特率 4800~115200, 检测站号和串口模式\nAuto-detect servo: scan baud 4800~115200, detect slave address and protocol mode",
+            "description": "自动探索伺服通信参数：遍历波特率 4800~115200 和从站 1~N, 检测站号和串口模式\nAuto-detect servo: scan baud 4800~115200, slave 1~N, protocol mode",
             "parameters": {
                 "Slave Address": {
                     "type": "Integer",
                     "hexMode": true,
-                    "description": "要探测的从站地址\nSlave address to probe",
+                    "description": "起始从站地址 (Start slave, included in scan)",
                     "default": 1,
                     "min": 1,
-                    "max": 254   
+                    "max": 254
+                },
+                "Scan End": {
+                    "type": "Integer",
+                    "hexMode": true,
+                    "description": "结束从站地址 (End slave, included in scan). Set equal to Slave Address to scan only one. Max recommended: 10 for speed.\n结束从站地址。设为等于 Slave Address 表示只扫一个。推荐最大 10 以保证速度。",
+                    "default": 1,
+                    "min": 1,
+                    "max": 254
                 }
             }
         },
