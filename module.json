@@ -39,7 +39,7 @@
     "values": {
         "Communication Information": {
             "type": "Container",
-            "collapsed": true,
+            "collapsed": false,
             "Slave Address": {
                 "type": "String",
                 "description": "检测到的伺服从站地址 (JS 自动更新)\nDetected servo slave address (auto-updated by JS)"
