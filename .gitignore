@@ -1,10 +1,4 @@
-.DS_Store
-Thumbs.db
-*.swp
-*.swo
-*~
-.idea/
-.vscode/
-__pycache__/
-*.pyc
-/tmp/
+# Chataigne session and autosave files
+*.noisette
+Servo RTU KS100_autosave/
+.omo/
