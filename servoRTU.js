@@ -443,6 +443,7 @@ function init() {
 
 function moduleParameterChanged(param) {
     if (param.niceName == "Get Communication") getCommunication();
+    else if (param.niceName == "Test Values") testValues();
 }
 
 function moduleCleanedUp() {
@@ -455,4 +456,32 @@ function sendRaw(hexCommand) {
     if (body.length < 2) return;
     clearLog();
     sendFrame(body);
+}
+
+// 诊断: dump local.values 树 + 测试 set/get
+function testValues() {
+    script.log("=== Test Values: dump local tree ===");
+    script.log("local.values = " + (local.values == null ? "null" : "exists"));
+    if (local.values == null) return;
+    var keys = [];
+    for (var k in local.values) keys.push(k);
+    script.log("local.values keys: " + keys.join(", "));
+    var ci = local.values.getChild("Communication Information");
+    script.log("ci = " + (ci == null ? "null" : "type=" + ci.type + " name=" + ci.name));
+    if (ci == null) return;
+    var sa = ci.getChild("Slave Address");
+    script.log("ci.getChild('Slave Address') = " + (sa == null ? "null" : "type=" + sa.type));
+    if (sa == null) return;
+    var before = sa.get();
+    script.log("sa.get() before = " + (before === undefined ? "undefined" : "'" + before + "'"));
+    sa.set("TEST_42");
+    var after = sa.get();
+    script.log("sa.get() after set('TEST_42') = " + (after === undefined ? "undefined" : "'" + after + "'"));
+    if (after === "TEST_42") {
+        script.log("OK: set/get works");
+    } else {
+        script.log("FAIL: set did not persist");
+    }
+    sa.set("" + before);
+    script.log("=== Test Values done ===");
 }

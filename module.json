@@ -30,6 +30,11 @@
             "type": "Trigger",
             "description": "自动探测伺服参数 (固定从站 1, 扫描 baud). 完成后若伺服非 8N1 会自动改为 8N1.\nProbe servo (slave 1, all baud). Forces 8N1 if servo is not 8N1."
         }
+,
+        "Test Values": {
+            "type": "Trigger",
+            "description": "诊断: dump local.values 树 + 测试 set/get\nDiagnostic: dump local.values tree + test set/get"
+        }
     },
     "values": {
         "Communication Information": {
