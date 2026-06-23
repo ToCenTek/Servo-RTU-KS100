@@ -463,12 +463,13 @@ function testValues() {
     script.log("=== Test Values: dump local tree ===");
     script.log("local.values = " + (local.values == null ? "null" : "exists"));
     if (local.values == null) return;
-    var keys = [];
-    for (var k in local.values) keys.push(k);
-    script.log("local.values keys: " + keys.join(", "));
+    var names = local.values.getChildNames();
+    script.log("local.values children: " + names.join(", "));
     var ci = local.values.getChild("Communication Information");
     script.log("ci = " + (ci == null ? "null" : "type=" + ci.type + " name=" + ci.name));
     if (ci == null) return;
+    var ciNames = ci.getChildNames();
+    script.log("ci children: " + ciNames.join(", "));
     var sa = ci.getChild("Slave Address");
     script.log("ci.getChild('Slave Address') = " + (sa == null ? "null" : "type=" + sa.type));
     if (sa == null) return;
